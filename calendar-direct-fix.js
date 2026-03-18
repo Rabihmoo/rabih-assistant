@@ -97,16 +97,18 @@ async function createCalendarEvent(title, date, time, durationMinutes = 60) {
   const auth = getAuthClient();
   const calendar = google.calendar({ version: 'v3', auth });
 
-  // Build ISO string with Maputo offset (+02:00) to avoid UTC conversion errors
-  const startISO = `${date}T${time}:00+02:00`;
-  const startMs = new Date(startISO).getTime();
-  const endMs = startMs + durationMinutes * 60000;
-  const endISO = new Date(endMs).toISOString().replace('Z', '+02:00').replace(/\.\d{3}/, '');
+  // Calculate end time by adding duration to start time directly (no UTC conversion)
+  const [startH, startM] = time.split(':').map(Number);
+  const totalEndMins = startH * 60 + startM + durationMinutes;
+  const endH = Math.floor(totalEndMins / 60) % 24;
+  const endM = totalEndMins % 60;
+  const endTime = String(endH).padStart(2, '0') + ':' + String(endM).padStart(2, '0');
 
+  // Pass naive local time strings with timeZone — Google handles UTC conversion
   const event = {
     summary: title,
-    start: { dateTime: startISO, timeZone: 'Africa/Maputo' },
-    end: { dateTime: endISO, timeZone: 'Africa/Maputo' },
+    start: { dateTime: `${date}T${time}:00`, timeZone: 'Africa/Maputo' },
+    end: { dateTime: `${date}T${endTime}:00`, timeZone: 'Africa/Maputo' },
     reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 30 }] },
   };
 
@@ -126,13 +128,13 @@ const calendarTools = [
   },
   {
     name: 'create_calendar_event',
-    description: "Create an event or reminder in Rabih's Google Calendar. Always use Maputo time (UTC+2).",
+    description: "Create an event or reminder in Rabih's Google Calendar. Time is always Maputo time (UTC+2).",
     input_schema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Event title' },
         date: { type: 'string', description: 'Date in YYYY-MM-DD format' },
-        time: { type: 'string', description: 'Time in HH:MM 24h format (Maputo time UTC+2)' },
+        time: { type: 'string', description: 'Time in HH:MM 24h format (Maputo time)' },
         duration_minutes: { type: 'number', description: 'Duration in minutes, default 60' },
         is_reminder: { type: 'boolean', description: 'True if this is a reminder' }
       },
