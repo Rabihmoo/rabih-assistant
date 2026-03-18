@@ -26,35 +26,32 @@ function buildSystemPrompt() {
     'Today is ' + today + ', current time is ' + time + ' (Maputo time, UTC+2).',
     '',
     'About Rabih:',
-    '- Lebanese businessman based in Maputo, Mozambique',
-    '- Owns: BBQ House LDA, SALT LDA, Central Kitchen LDA, Executive Cleaning Services',
+    '- Lebanese businessman, owner of Rabih Group based in Maputo, Mozambique',
+    '- Owns: BBQ House LDA, SALT LDA (restaurant/bar), Central Kitchen LDA, Executive Cleaning Services',
     '- Also owns Burgerury burger brand in Beirut, Lebanon',
     '- Speaks English and Arabic, sometimes mixes both',
-    '- Direct person, no unnecessary questions',
+    '- Direct person, gets things done, no unnecessary questions',
     '',
     'Your personality:',
-    '- Top-tier personal assistant, concise and direct',
+    '- Real personal assistant, like a top-tier human EA',
+    '- Concise, direct, warm',
     '- Reply in the same language Rabih uses',
     '- Never say you are an AI unless directly asked',
     '',
-    'TOOL RULES - CRITICAL:',
-    '- ALWAYS use tools immediately, never ask for confirmation first',
-    '- When asked to get/show/read a file: call read_file and show the FULL CONTENT directly in chat',
-    '- NEVER say you cannot read a file - just call read_file and return the content',
-    '- When asked to delete an event: call delete_calendar_event immediately',
-    '- When asked to send an email: call send_email immediately',
-    '- When asked to delete a file: call delete_drive_file immediately',
-    '- NEVER ask clarifying questions before acting - just do it',
+    'TOOL USAGE RULES:',
+    '- ALWAYS use tools to complete requests - NEVER skip a tool call',
+    '- NEVER confirm success unless the tool returned success:true or a valid result',
+    '- If a tool fails, tell Rabih exactly what failed',
+    '- You have FULL authority over Gmail, Calendar, and Drive',
+    '- You CAN delete calendar events - use delete_calendar_event tool',
+    '- You CAN read ANY file from Drive including .txt files',
+    '- You CAN send emails with content from files',
     '- NEVER say you cannot do something that your tools support',
-    '- If a tool fails, report the exact error',
-    '',
-    'FILE DISPLAY RULE:',
-    '- When you read a file, always paste the full text content directly in your reply',
-    '- Do not just say the filename - show the actual content',
     '',
     'DATA RULES:',
-    '- NEVER invent or fabricate data',
-    '- Only report what tools actually returned'
+    '- NEVER invent or fabricate emails, events, files, or any data',
+    '- Only report what tools actually returned',
+    '- If results are empty, say exactly that'
   ];
   return parts.join('\n');
 }
@@ -65,10 +62,14 @@ async function saveMessage(chatId, role, content) {
   try {
     const contentToStore = typeof content === 'string' ? content : JSON.stringify(content);
     const { error } = await supabase.from('assistant_messages').insert({
-      chat_id: String(chatId), role: role, content: contentToStore
+      chat_id: String(chatId),
+      role: role,
+      content: contentToStore
     });
     if (error) console.error('Save error:', error.message);
-  } catch (e) { console.error('Save exception:', e.message); }
+  } catch (e) {
+    console.error('Save exception:', e.message);
+  }
 }
 
 async function loadHistory(chatId) {
@@ -83,10 +84,13 @@ async function loadHistory(chatId) {
     return (data || []).reverse().map(function(r) {
       return {
         role: r.role,
-        content: (function() { try { return JSON.parse(r.content); } catch(e) { return r.content; } })()
+        content: (function() { try { return JSON.parse(r.content); } catch (e) { return r.content; } })()
       };
     });
-  } catch (e) { console.error('Load history exception:', e.message); return []; }
+  } catch (e) {
+    console.error('Load history exception:', e.message);
+    return [];
+  }
 }
 
 async function sendTelegram(chatId, text) {
@@ -110,7 +114,10 @@ async function executeTool(toolName, toolInput) {
     if (['read_file', 'search_in_file', 'update_sheet_cell'].includes(toolName)) return await handleFilesTool(toolName, toolInput);
     if (['search_drive', 'list_drive_files', 'delete_drive_file'].includes(toolName)) return await handleDriveTool(toolName, toolInput);
     return { error: 'Unknown tool' };
-  } catch (e) { console.error('Tool error:', e.message); return { error: e.message }; }
+  } catch (e) {
+    console.error('Tool error:', e.message);
+    return { error: e.message };
+  }
 }
 
 async function callClaude(messages) {
@@ -124,57 +131,65 @@ async function callClaude(messages) {
   return res.data;
 }
 
-async function handleMessage(chatId, userText) {
+const processedMessages = new Set();
+
+async function handleMessage(chatId, userText, messageId) {
+  const dedupKey = String(chatId) + '_' + String(messageId);
+  if (processedMessages.has(dedupKey)) return;
+  processedMessages.add(dedupKey);
+  setTimeout(function() { processedMessages.delete(dedupKey); }, 60000);
+
   if (userText.toLowerCase().trim() === '/reset' || userText.toLowerCase().trim() === 'reset memory') {
     await supabase.from('assistant_messages').delete().eq('chat_id', String(chatId));
     await sendTelegram(chatId, 'Memory cleared. Fresh start!');
     return;
   }
+
   await sendTyping(chatId);
-  await saveMessage(chatId, 'user', userText);
+
   const history = await loadHistory(chatId);
-  const messages = [...history];
-  let response = await callClaude(messages);
+  history.push({ role: 'user', content: userText });
+
+  let response = await callClaude(history);
   let rounds = 0;
+
   while (response.stop_reason === 'tool_use' && rounds < 5) {
     rounds++;
     const toolUseBlocks = response.content.filter(function(b) { return b.type === 'tool_use'; });
     if (!toolUseBlocks.length) break;
     await sendTyping(chatId);
-    await saveMessage(chatId, 'assistant', response.content);
-    messages.push({ role: 'assistant', content: response.content });
+    history.push({ role: 'assistant', content: response.content });
     const toolResults = [];
     for (let i = 0; i < toolUseBlocks.length; i++) {
       const toolUse = toolUseBlocks[i];
       const result = await executeTool(toolUse.name, toolUse.input);
       toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
     }
-    await saveMessage(chatId, 'user', toolResults);
-    messages.push({ role: 'user', content: toolResults });
-    response = await callClaude(messages);
+    history.push({ role: 'user', content: toolResults });
+    response = await callClaude(history);
   }
+
   const textBlock = response.content.find(function(b) { return b.type === 'text'; });
   const finalReply = textBlock ? textBlock.text : 'Done!';
+
+  await saveMessage(chatId, 'user', userText);
   await saveMessage(chatId, 'assistant', finalReply);
   await sendTelegram(chatId, finalReply);
 }
 
-app.post('/webhook', async function(req, res) {
+app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
   try {
     const msg = req.body && req.body.message;
     if (!msg || !msg.text) return;
     console.log('[' + msg.chat.id + '] ' + msg.text);
-    await handleMessage(msg.chat.id, msg.text);
+    await handleMessage(msg.chat.id, msg.text, msg.message_id);
   } catch (err) {
     const errMsg = (err.response && err.response.data && err.response.data.error && err.response.data.error.message) || err.message || 'Unknown error';
     console.error('Handler error:', errMsg);
-    try {
-      const chatId = req.body && req.body.message && req.body.message.chat && req.body.message.chat.id;
-      if (chatId) await sendTelegram(chatId, 'Error: ' + errMsg);
-    } catch(e) {}
+    try { const chatId = req.body && req.body.message && req.body.message.chat && req.body.message.chat.id; if (chatId) await sendTelegram(chatId, 'Error: ' + errMsg); } catch (e) {}
   }
 });
 
-app.get('/', function(req, res) { res.json({ status: 'Rabih Assistant running', tools: 'enabled' }); });
+app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running', tools: 'enabled' }));
 app.listen(PORT, function() { console.log('Rabih Assistant listening on port ' + PORT); });
