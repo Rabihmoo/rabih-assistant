@@ -24,10 +24,9 @@ async function searchDrive(query) {
     files: files.map(f => ({
       id: f.id,
       name: f.name,
-      type: f.mimeType.split('.').pop().split('application/vnd.google-apps.').pop(),
+      type: f.mimeType.split('application/vnd.google-apps.').pop(),
       modified: f.modifiedTime,
       link: f.webViewLink,
-      size: f.size || '',
     }))
   };
 }
@@ -46,11 +45,17 @@ async function listDriveFiles() {
     files: files.map(f => ({
       id: f.id,
       name: f.name,
-      type: f.mimeType.split('.').pop().split('application/vnd.google-apps.').pop(),
+      type: f.mimeType.split('application/vnd.google-apps.').pop(),
       modified: f.modifiedTime,
       link: f.webViewLink,
     }))
   };
+}
+
+async function deleteDriveFile(fileId, fileName) {
+  const drive = getDriveClient();
+  await drive.files.delete({ fileId });
+  return { success: true, deleted: fileName || fileId };
 }
 
 const driveTools = [
@@ -68,10 +73,18 @@ const driveTools = [
   {
     name: 'list_drive_files',
     description: "List the most recently modified files in Rabih's Google Drive.",
+    input_schema: { type: 'object', properties: {}, required: [] }
+  },
+  {
+    name: 'delete_drive_file',
+    description: "Permanently delete a file from Rabih's Google Drive. Use the file ID from search_drive or list_drive_files results.",
     input_schema: {
       type: 'object',
-      properties: {},
-      required: []
+      properties: {
+        file_id: { type: 'string', description: 'The Google Drive file ID to delete' },
+        file_name: { type: 'string', description: 'The file name (for confirmation message)' }
+      },
+      required: ['file_id']
     }
   }
 ];
@@ -83,6 +96,8 @@ async function handleDriveTool(toolName, toolInput) {
         return await searchDrive(toolInput.query);
       case 'list_drive_files':
         return await listDriveFiles();
+      case 'delete_drive_file':
+        return await deleteDriveFile(toolInput.file_id, toolInput.file_name);
       default:
         return { error: `Unknown drive tool: ${toolName}` };
     }
