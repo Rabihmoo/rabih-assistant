@@ -15,28 +15,47 @@ async function listCalendarEvents(daysAhead = 7) {
   const now = new Date();
   const future = new Date();
   future.setDate(future.getDate() + daysAhead);
-  const res = await calendar.events.list({
-    calendarId: 'primary',
-    timeMin: now.toISOString(),
-    timeMax: future.toISOString(),
-    maxResults: 50,
-    singleEvents: true,
-    orderBy: 'startTime',
-  });
-  const events = res.data.items || [];
-  if (events.length === 0) return { count: 0, events: [] };
-  return {
-    count: events.length,
-    events: events.map(e => ({
-      id: e.id,
-      title: e.summary || '(No title)',
-      start: e.start.dateTime || e.start.date,
-      end: e.end.dateTime || e.end.date,
-      location: e.location || '',
-      description: e.description || '',
-      status: e.status,
-    }))
-  };
+
+  // Get all calendars first
+  const calList = await calendar.calendarList.list();
+  const calendars = calList.data.items || [];
+
+  const allEvents = [];
+
+  // Fetch events from ALL calendars
+  for (const cal of calendars) {
+    try {
+      const res = await calendar.events.list({
+        calendarId: cal.id,
+        timeMin: now.toISOString(),
+        timeMax: future.toISOString(),
+        maxResults: 50,
+        singleEvents: true,
+        orderBy: 'startTime',
+      });
+      const events = res.data.items || [];
+      for (const e of events) {
+        allEvents.push({
+          id: e.id,
+          calendar: cal.summary,
+          title: e.summary || '(No title)',
+          start: e.start.dateTime || e.start.date,
+          end: e.end.dateTime || e.end.date,
+          location: e.location || '',
+          description: e.description || '',
+          status: e.status,
+        });
+      }
+    } catch(err) {
+      // Skip calendars we can't read
+      console.log('Skipping calendar:', cal.summary, err.message);
+    }
+  }
+
+  // Sort by start time
+  allEvents.sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  return { count: allEvents.length, events: allEvents };
 }
 
 async function createCalendarEvent(title, date, time, durationMinutes = 60) {
@@ -56,7 +75,7 @@ async function createCalendarEvent(title, date, time, durationMinutes = 60) {
 const calendarTools = [
   {
     name: 'list_calendar_events',
-    description: "List Rabih's upcoming calendar events. Use for 'what do I have this week', 'show my schedule', 'upcoming events'.",
+    description: "List Rabih's upcoming calendar events across ALL calendars. Use for 'what do I have this week', 'show my schedule', 'upcoming events', 'tasks', 'reminders'.",
     input_schema: {
       type: 'object',
       properties: { days_ahead: { type: 'number', description: 'How many days ahead to look. Default 7.' } },
