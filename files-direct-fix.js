@@ -12,12 +12,12 @@ function getAuthClient() {
 
 async function findFileByName(name) {
   const auth = getAuthClient();
-  const drive = google.drive({ version: 'v3', auth });
+  const drive = google.drive({ version: 'v3', auth: auth });
   const res = await drive.files.list({
     q: "name contains '" + name.replace(/'/g, "\\'") + "' and trashed = false",
     pageSize: 5,
     fields: 'files(id, name, mimeType)',
-    orderBy: 'modifiedTime desc',
+    orderBy: 'modifiedTime desc'
   });
   return res.data.files || [];
 }
@@ -28,13 +28,13 @@ async function readFileByName(fileName, range) {
   if (files.length === 0) return { error: 'No file found matching "' + fileName + '"' };
   const file = files[0];
   const mimeType = file.mimeType;
-  const drive = google.drive({ version: 'v3', auth });
+  const drive = google.drive({ version: 'v3', auth: auth });
 
   if (mimeType === 'application/vnd.google-apps.spreadsheet') {
-    const sheets = google.sheets({ version: 'v4', auth });
+    const sheets = google.sheets({ version: 'v4', auth: auth });
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: file.id,
-      range: range || 'A1:Z500',
+      range: range || 'A1:Z500'
     });
     const rows = res.data.values || [];
     return { fileId: file.id, fileName: file.name, type: 'spreadsheet', rowCount: rows.length, rows: rows };
@@ -110,12 +110,12 @@ async function updateSheetCell(fileName, cell, value) {
   if (file.mimeType !== 'application/vnd.google-apps.spreadsheet') {
     return { error: '"' + file.name + '" is not a Google Sheet.' };
   }
-  const sheets = google.sheets({ version: 'v4', auth });
+  const sheets = google.sheets({ version: 'v4', auth: auth });
   await sheets.spreadsheets.values.update({
     spreadsheetId: file.id,
     range: cell,
     valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [[value]] },
+    requestBody: { values: [[value]] }
   });
   return { success: true, fileName: file.name, cell: cell, newValue: value };
 }
