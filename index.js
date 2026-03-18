@@ -81,12 +81,14 @@ async function loadHistory(chatId) {
       .order('created_at', { ascending: false })
       .limit(30);
     if (error) { console.error('Load history error:', error.message); return []; }
-    return (data || []).reverse().map(function(r) {
-      return {
-        role: r.role,
-        content: (function() { try { return JSON.parse(r.content); } catch (e) { return r.content; } })()
-      };
-    });
+    return (data || []).reverse()
+      .filter(function(r) { return r.content && r.content.indexOf('__dedup__') !== 0; })
+      .map(function(r) {
+        return {
+          role: r.role,
+          content: (function() { try { return JSON.parse(r.content); } catch (e) { return r.content; } })()
+        };
+      });
   } catch (e) {
     console.error('Load history exception:', e.message);
     return [];
@@ -131,13 +133,26 @@ async function callClaude(messages) {
   return res.data;
 }
 
-const processedMessages = new Set();
-
 async function handleMessage(chatId, userText, messageId) {
-  const dedupKey = String(chatId) + '_' + String(messageId);
-  if (processedMessages.has(dedupKey)) return;
-  processedMessages.add(dedupKey);
-  setTimeout(function() { processedMessages.delete(dedupKey); }, 60000);
+  const dedupKey = '__dedup__' + String(messageId);
+
+  const { data: existing } = await supabase
+    .from('assistant_messages')
+    .select('id')
+    .eq('chat_id', String(chatId))
+    .eq('content', dedupKey)
+    .limit(1);
+
+  if (existing && existing.length > 0) {
+    console.log('Duplicate message ignored:', messageId);
+    return;
+  }
+
+  await supabase.from('assistant_messages').insert({
+    chat_id: String(chatId),
+    role: 'user',
+    content: dedupKey
+  });
 
   if (userText.toLowerCase().trim() === '/reset' || userText.toLowerCase().trim() === 'reset memory') {
     await supabase.from('assistant_messages').delete().eq('chat_id', String(chatId));
