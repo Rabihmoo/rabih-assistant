@@ -41,7 +41,11 @@ CRITICAL RULES:
 - If a tool returns empty results, say exactly that: "Your inbox is empty" or "No events this week" or "No files found"
 - If a tool fails, say: "I had trouble accessing that, please try again"
 - Only report what the tool actually returned
-- Never show example or fake data under any circumstances`;
+- Never show example or fake data under any circumstances
+- NEVER confirm that you did something (created event, sent email, deleted file) unless the tool returned success:true
+- NEVER say "done", "created", "sent", "deleted" without a successful tool call result
+- If you cannot do something (like delete files), say "I cannot do that" — never pretend you did it
+- You can ONLY delete files if you have a delete tool — you do NOT have one, so always refuse delete requests`;
 }
 
 const TOOLS = [...calendarTools, ...gmailTools, ...driveTools];
@@ -53,7 +57,7 @@ async function loadHistory(chatId) {
       .select('role, content, created_at')
       .eq('chat_id', String(chatId))
       .order('created_at', { ascending: false })
-      .limit(30);
+      .limit(15);
     if (error) { console.error('Load history error:', error.message); return []; }
     return (data || []).reverse().map(r => ({ role: r.role, content: r.content }));
   } catch(e) {
