@@ -14,11 +14,9 @@ async function listCalendarEvents(daysAhead = 7) {
   const auth = getAuthClient();
   const calendar = google.calendar({ version: 'v3', auth });
   const tasks = google.tasks({ version: 'v1', auth });
-
   const now = new Date();
   const future = new Date();
   future.setDate(future.getDate() + daysAhead);
-
   const allItems = [];
 
   try {
@@ -36,6 +34,8 @@ async function listCalendarEvents(daysAhead = 7) {
         for (const e of (res.data.items || [])) {
           allItems.push({
             type: 'event',
+            id: e.id,
+            calendarId: cal.id,
             calendar: cal.summary,
             title: e.summary || '(No title)',
             start: e.start.dateTime || e.start.date,
@@ -44,13 +44,9 @@ async function listCalendarEvents(daysAhead = 7) {
             status: e.status,
           });
         }
-      } catch(err) {
-        console.log('Skipping calendar:', cal.summary, err.message);
-      }
+      } catch(err) { console.log('Skipping calendar:', cal.summary, err.message); }
     }
-  } catch(err) {
-    console.log('Calendar list error:', err.message);
-  }
+  } catch(err) { console.log('Calendar list error:', err.message); }
 
   try {
     const taskLists = await tasks.tasklists.list();
@@ -76,13 +72,9 @@ async function listCalendarEvents(daysAhead = 7) {
             });
           }
         }
-      } catch(err) {
-        console.log('Skipping task list:', tl.title, err.message);
-      }
+      } catch(err) { console.log('Skipping task list:', tl.title, err.message); }
     }
-  } catch(err) {
-    console.log('Tasks list error:', err.message);
-  }
+  } catch(err) { console.log('Tasks list error:', err.message); }
 
   allItems.sort((a, b) => {
     if (!a.start) return 1;
@@ -96,33 +88,72 @@ async function listCalendarEvents(daysAhead = 7) {
 async function createCalendarEvent(title, date, time, durationMinutes = 60) {
   const auth = getAuthClient();
   const calendar = google.calendar({ version: 'v3', auth });
-
-  // Calculate end time by adding duration to start time directly (no UTC conversion)
   const [startH, startM] = time.split(':').map(Number);
   const totalEndMins = startH * 60 + startM + durationMinutes;
   const endH = Math.floor(totalEndMins / 60) % 24;
   const endM = totalEndMins % 60;
   const endTime = String(endH).padStart(2, '0') + ':' + String(endM).padStart(2, '0');
-
-  // Pass naive local time strings with timeZone — Google handles UTC conversion
   const event = {
     summary: title,
     start: { dateTime: `${date}T${time}:00`, timeZone: 'Africa/Maputo' },
     end: { dateTime: `${date}T${endTime}:00`, timeZone: 'Africa/Maputo' },
     reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 30 }] },
   };
-
   const res = await calendar.events.insert({ calendarId: 'primary', requestBody: event });
   return { success: true, eventId: res.data.id, title, start: res.data.start.dateTime };
+}
+
+async function deleteCalendarEvent(titleKeyword, date) {
+  const auth = getAuthClient();
+  const calendar = google.calendar({ version: 'v3', auth });
+
+  // Search a wide window around the date
+  const searchStart = new Date(date || Date.now());
+  searchStart.setHours(0, 0, 0, 0);
+  const searchEnd = new Date(searchStart);
+  searchEnd.setDate(searchEnd.getDate() + 1);
+
+  const calList = await calendar.calendarList.list();
+  const deleted = [];
+  const errors = [];
+
+  for (const cal of (calList.data.items || [])) {
+    try {
+      const res = await calendar.events.list({
+        calendarId: cal.id,
+        timeMin: searchStart.toISOString(),
+        timeMax: searchEnd.toISOString(),
+        maxResults: 50,
+        singleEvents: true,
+      });
+      for (const e of (res.data.items || [])) {
+        const title = (e.summary || '').toLowerCase();
+        const keyword = titleKeyword.toLowerCase();
+        if (title.includes(keyword)) {
+          await calendar.events.delete({ calendarId: cal.id, eventId: e.id });
+          deleted.push({ title: e.summary, calendar: cal.summary, start: e.start.dateTime || e.start.date });
+        }
+      }
+    } catch(err) {
+      errors.push(`${cal.summary}: ${err.message}`);
+    }
+  }
+
+  if (deleted.length === 0) {
+    return { success: false, message: `No events found matching "${titleKeyword}" on ${date}`, errors };
+  }
+  return { success: true, deleted, count: deleted.length };
 }
 
 const calendarTools = [
   {
     name: 'list_calendar_events',
-    description: "List Rabih's upcoming calendar events AND tasks across ALL calendars. Use for 'what do I have this week', 'show my schedule', 'upcoming events', 'tasks', 'reminders', 'what is on my calendar'.",
+    description: "List Rabih's upcoming calendar events AND tasks across ALL calendars.",
     input_schema: {
       type: 'object',
-      properties: { days_ahead: { type: 'number', description: 'How many days ahead to look. Default 7.' } },
+      properties: {
+        days_ahead: { type: 'number', description: 'How many days ahead to look. Default 7.' }
+      },
       required: []
     }
   },
@@ -135,10 +166,21 @@ const calendarTools = [
         title: { type: 'string', description: 'Event title' },
         date: { type: 'string', description: 'Date in YYYY-MM-DD format' },
         time: { type: 'string', description: 'Time in HH:MM 24h format (Maputo time)' },
-        duration_minutes: { type: 'number', description: 'Duration in minutes, default 60' },
-        is_reminder: { type: 'boolean', description: 'True if this is a reminder' }
+        duration_minutes: { type: 'number', description: 'Duration in minutes, default 60' }
       },
       required: ['title', 'date', 'time']
+    }
+  },
+  {
+    name: 'delete_calendar_event',
+    description: "Delete/remove a calendar event by title keyword and date. Use when Rabih says 'remove', 'delete', 'cancel' an event.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        title_keyword: { type: 'string', description: 'Part of the event title to match, e.g. "Youssef"' },
+        date: { type: 'string', description: 'Date in YYYY-MM-DD format' }
+      },
+      required: ['title_keyword', 'date']
     }
   }
 ];
@@ -150,6 +192,8 @@ async function handleCalendarTool(toolName, toolInput) {
         return await listCalendarEvents(toolInput.days_ahead || 7);
       case 'create_calendar_event':
         return await createCalendarEvent(toolInput.title, toolInput.date, toolInput.time, toolInput.duration_minutes || 60);
+      case 'delete_calendar_event':
+        return await deleteCalendarEvent(toolInput.title_keyword, toolInput.date);
       default:
         return { error: `Unknown calendar tool: ${toolName}` };
     }
