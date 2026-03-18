@@ -14,7 +14,7 @@ async function findFileByName(name) {
   const auth = getAuthClient();
   const drive = google.drive({ version: 'v3', auth });
   const res = await drive.files.list({
-    q: `name contains '${name.replace(/'/g, "\\'")}' and trashed = false`,
+    q: "name contains '" + name.replace(/'/g, "\\'") + "' and trashed = false",
     pageSize: 5,
     fields: 'files(id, name, mimeType)',
     orderBy: 'modifiedTime desc',
@@ -25,12 +25,11 @@ async function findFileByName(name) {
 async function readFileByName(fileName, range) {
   const auth = getAuthClient();
   const files = await findFileByName(fileName);
-  if (files.length === 0) return { error: `No file found matching "${fileName}"` };
+  if (files.length === 0) return { error: 'No file found matching "' + fileName + '"' };
   const file = files[0];
   const mimeType = file.mimeType;
   const drive = google.drive({ version: 'v3', auth });
 
-  // Google Sheets
   if (mimeType === 'application/vnd.google-apps.spreadsheet') {
     const sheets = google.sheets({ version: 'v4', auth });
     const res = await sheets.spreadsheets.values.get({
@@ -38,31 +37,28 @@ async function readFileByName(fileName, range) {
       range: range || 'A1:Z500',
     });
     const rows = res.data.values || [];
-    return { fileId: file.id, fileName: file.name, type: 'spreadsheet', rowCount: rows.length, rows };
+    return { fileId: file.id, fileName: file.name, type: 'spreadsheet', rowCount: rows.length, rows: rows };
   }
 
-  // Excel / CSV
   if (mimeType.includes('excel') || mimeType.includes('spreadsheet') || file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv')) {
     const res = await drive.files.export(
       { fileId: file.id, mimeType: 'text/csv' },
       { responseType: 'arraybuffer' }
-    ).catch(() => drive.files.get({ fileId: file.id, alt: 'media' }, { responseType: 'arraybuffer' }));
+    ).catch(function() { return drive.files.get({ fileId: file.id, alt: 'media' }, { responseType: 'arraybuffer' }); });
     const text = Buffer.from(res.data).toString('utf-8');
-    const rows = text.split('\n').filter(r => r.trim()).map(r => r.split(','));
+    const rows = text.split('\n').filter(function(r) { return r.trim(); }).map(function(r) { return r.split(','); });
     return { fileId: file.id, fileName: file.name, type: 'excel', rowCount: rows.length, rows: rows.slice(0, 200) };
   }
 
-  // PDF
   if (mimeType === 'application/pdf' || file.name.endsWith('.pdf')) {
     const res = await drive.files.export(
       { fileId: file.id, mimeType: 'text/plain' },
       { responseType: 'arraybuffer' }
-    ).catch(() => drive.files.get({ fileId: file.id, alt: 'media' }, { responseType: 'arraybuffer' }));
+    ).catch(function() { return drive.files.get({ fileId: file.id, alt: 'media' }, { responseType: 'arraybuffer' }); });
     const text = Buffer.from(res.data).toString('utf-8');
     return { fileId: file.id, fileName: file.name, type: 'pdf', text: text.substring(0, 5000), totalChars: text.length };
   }
 
-  // Google Docs / Word
   if (mimeType === 'application/vnd.google-apps.document' || file.name.endsWith('.docx')) {
     const res = await drive.files.export(
       { fileId: file.id, mimeType: 'text/plain' },
@@ -72,7 +68,6 @@ async function readFileByName(fileName, range) {
     return { fileId: file.id, fileName: file.name, type: 'document', text: text.substring(0, 5000) };
   }
 
-  // Plain text / TXT — direct download
   if (mimeType === 'text/plain' || file.name.endsWith('.txt') || mimeType.startsWith('text/')) {
     const res = await drive.files.get(
       { fileId: file.id, alt: 'media' },
@@ -82,7 +77,6 @@ async function readFileByName(fileName, range) {
     return { fileId: file.id, fileName: file.name, type: 'text', text: text.substring(0, 5000), totalChars: text.length };
   }
 
-  // Fallback — try direct download for anything else
   try {
     const res = await drive.files.get(
       { fileId: file.id, alt: 'media' },
@@ -91,30 +85,30 @@ async function readFileByName(fileName, range) {
     const text = Buffer.from(res.data).toString('utf-8');
     return { fileId: file.id, fileName: file.name, type: 'raw', text: text.substring(0, 5000) };
   } catch (e) {
-    return { error: `Cannot read file type: ${mimeType}`, fileName: file.name, fileId: file.id };
+    return { error: 'Cannot read file type: ' + mimeType, fileName: file.name, fileId: file.id };
   }
 }
 
 async function searchInFile(fileName, query) {
   const content = await readFileByName(fileName);
   if (content.error) return content;
-  let lines = [];
+  var lines = [];
   if (content.rows) {
-    lines = content.rows.map((r, i) => `Row ${i + 1}: ${Array.isArray(r) ? r.join(' | ') : r}`);
+    lines = content.rows.map(function(r, i) { return 'Row ' + (i + 1) + ': ' + (Array.isArray(r) ? r.join(' | ') : r); });
   } else if (content.text) {
     lines = content.text.split('\n');
   }
-  const matches = lines.filter(l => l.toLowerCase().includes(query.toLowerCase()));
-  return { fileName: content.fileName, query, matchCount: matches.length, matches: matches.slice(0, 30) };
+  const matches = lines.filter(function(l) { return l.toLowerCase().includes(query.toLowerCase()); });
+  return { fileName: content.fileName, query: query, matchCount: matches.length, matches: matches.slice(0, 30) };
 }
 
 async function updateSheetCell(fileName, cell, value) {
   const auth = getAuthClient();
   const files = await findFileByName(fileName);
-  if (files.length === 0) return { error: `No file found matching "${fileName}"` };
+  if (files.length === 0) return { error: 'No file found matching "' + fileName + '"' };
   const file = files[0];
   if (file.mimeType !== 'application/vnd.google-apps.spreadsheet') {
-    return { error: `"${file.name}" is not a Google Sheet.` };
+    return { error: '"' + file.name + '" is not a Google Sheet.' };
   }
   const sheets = google.sheets({ version: 'v4', auth });
   await sheets.spreadsheets.values.update({
@@ -123,13 +117,13 @@ async function updateSheetCell(fileName, cell, value) {
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [[value]] },
   });
-  return { success: true, fileName: file.name, cell, newValue: value };
+  return { success: true, fileName: file.name, cell: cell, newValue: value };
 }
 
 const filesTools = [
   {
     name: 'read_file',
-    description: "Read the full contents of any file in Google Drive — Google Sheets, Excel, PDF, Word, plain text (.txt), or any file. Returns all content.",
+    description: 'Read the full contents of any file in Google Drive including .txt, Sheets, Excel, PDF, Word.',
     input_schema: {
       type: 'object',
       properties: {
@@ -141,7 +135,7 @@ const filesTools = [
   },
   {
     name: 'search_in_file',
-    description: "Search for a keyword inside a file in Google Drive.",
+    description: 'Search for a keyword inside a file in Google Drive.',
     input_schema: {
       type: 'object',
       properties: {
@@ -153,7 +147,7 @@ const filesTools = [
   },
   {
     name: 'update_sheet_cell',
-    description: "Update a cell value in a Google Sheet.",
+    description: 'Update a cell value in a Google Sheet.',
     input_schema: {
       type: 'object',
       properties: {
@@ -172,19 +166,12 @@ async function handleFilesTool(toolName, toolInput) {
       case 'read_file': return await readFileByName(toolInput.file_name, toolInput.range);
       case 'search_in_file': return await searchInFile(toolInput.file_name, toolInput.search_query);
       case 'update_sheet_cell': return await updateSheetCell(toolInput.file_name, toolInput.cell, toolInput.value);
-      default: return { error: `Unknown files tool: ${toolName}` };
+      default: return { error: 'Unknown files tool: ' + toolName };
     }
   } catch (err) {
-    console.error(`Files tool error (${toolName}):`, err.message);
+    console.error('Files tool error (' + toolName + '):', err.message);
     return { error: err.message };
   }
 }
 
-module.exports = { filesTools, handleFilesTool };
-```
-
-Also add this line to the system prompt in `index.js` under TOOL USAGE RULES:
-```
-- You CAN read any file from Drive including .txt files — NEVER say you cannot read plain text files
-- You CAN delete calendar events — NEVER say you cannot delete events
-- You have FULL authority over Gmail, Calendar, and Drive — execute everything directly
+module.exports = { filesTools: filesTools, handleFilesTool: handleFilesTool };
