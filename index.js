@@ -20,32 +20,35 @@ function buildSystemPrompt() {
   const now = new Date();
   const today = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  return `You are the personal AI assistant of Rabih. You work for him full-time. Today is ${today}, current time is ${time} (Maputo time, UTC+2).
+  return `You are the personal AI assistant of Rabih Barakat. You work for him full-time. Today is ${today}, current time is ${time} (Maputo time, UTC+2).
 
 About Rabih:
 - Lebanese businessman, owner of Rabih Group based in Maputo, Mozambique
 - Owns: BBQ House LDA, SALT LDA (restaurant/bar), Central Kitchen LDA, Executive Cleaning Services
 - Also owns Burgerury burger brand in Beirut, Lebanon
 - Speaks English and Arabic, sometimes mixes both
-- Direct person, get things done, no unnecessary questions
+- Direct person, gets things done, no unnecessary questions
 
 Your personality:
 - Real personal assistant, like a top-tier human EA
 - Concise, direct, warm
-- Remember everything from the conversation
 - Reply in the same language Rabih uses
 - Never say you are an AI unless directly asked
 
-CRITICAL RULES:
-- NEVER invent, fabricate or make up emails, calendar events, files or any data
-- If a tool returns empty results, say exactly that: "Your inbox is empty" or "No events this week" or "No files found"
-- If a tool fails, say: "I had trouble accessing that, please try again"
-- Only report what the tool actually returned
-- Never show example or fake data under any circumstances
-- NEVER confirm that you did something (created event, sent email, deleted file) unless the tool returned success:true
-- NEVER say "done", "created", "sent", "deleted" without a successful tool call result
-- If you cannot do something (like delete files), say "I cannot do that" — never pretend you did it
-- You can ONLY delete files if you have a delete tool — you do NOT have one, so always refuse delete requests`;
+TOOL USAGE RULES - READ CAREFULLY:
+- ALWAYS use tools to complete requests — NEVER skip a tool call and pretend you did something
+- NEVER confirm success unless the tool returned success:true or a valid result
+- NEVER say "done", "created", "sent", "deleted", "I've set up..." without a successful tool result
+- If a tool fails, tell Rabih exactly what failed — never hide errors
+- For calendar: ALWAYS call create_calendar_event — never confirm without calling it
+- For email: ALWAYS call send_email — never confirm without calling it
+- For drive delete: ALWAYS call delete_drive_file — never confirm without calling it
+- If you cannot do something, say so directly: "I can't do that"
+
+DATA RULES:
+- NEVER invent or fabricate emails, events, files, or any data
+- Only report what tools actually returned
+- If results are empty, say exactly that`;
 }
 
 const TOOLS = [...calendarTools, ...gmailTools, ...driveTools];
@@ -57,7 +60,7 @@ async function loadHistory(chatId) {
       .select('role, content, created_at')
       .eq('chat_id', String(chatId))
       .order('created_at', { ascending: false })
-      .limit(15);
+      .limit(20);
     if (error) { console.error('Load history error:', error.message); return []; }
     return (data || []).reverse().map(r => ({ role: r.role, content: r.content }));
   } catch(e) {
@@ -106,17 +109,17 @@ async function executeTool(toolName, toolInput) {
   try {
     if (['read_emails', 'read_email_body', 'send_email'].includes(toolName)) {
       const result = await handleGmailTool(toolName, toolInput);
-      console.log('Gmail tool result:', JSON.stringify(result));
+      console.log('Gmail result:', JSON.stringify(result));
       return result;
     }
     if (['list_calendar_events', 'create_calendar_event'].includes(toolName)) {
       const result = await handleCalendarTool(toolName, toolInput);
-      console.log('Calendar tool result:', JSON.stringify(result));
+      console.log('Calendar result:', JSON.stringify(result));
       return result;
     }
-    if (['search_drive', 'list_drive_files'].includes(toolName)) {
+    if (['search_drive', 'list_drive_files', 'delete_drive_file'].includes(toolName)) {
       const result = await handleDriveTool(toolName, toolInput);
-      console.log('Drive tool result:', JSON.stringify(result));
+      console.log('Drive result:', JSON.stringify(result));
       return result;
     }
     return { error: 'Unknown tool', empty: true };
@@ -131,7 +134,7 @@ async function callClaude(messages) {
   const res = await axios.post(
     'https://api.anthropic.com/v1/messages',
     {
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-3-5-haiku-20241022',
       max_tokens: 1024,
       system: buildSystemPrompt(),
       tools: TOOLS,
@@ -151,6 +154,13 @@ async function callClaude(messages) {
 }
 
 async function handleMessage(chatId, userText) {
+  // Auto-clear memory command
+  if (userText.toLowerCase().trim() === '/reset' || userText.toLowerCase().trim() === 'reset memory') {
+    await supabase.from('assistant_messages').delete().eq('chat_id', String(chatId));
+    await sendTelegram(chatId, '✅ Memory cleared. Fresh start!');
+    return;
+  }
+
   await sendTyping(chatId);
   const history = await loadHistory(chatId);
   console.log('History loaded:', history.length, 'messages');
@@ -160,7 +170,7 @@ async function handleMessage(chatId, userText) {
   let finalReply = '';
   let rounds = 0;
 
-  while (response.stop_reason === 'tool_use' && rounds < 3) {
+  while (response.stop_reason === 'tool_use' && rounds < 5) {
     rounds++;
     const toolUseBlock = response.content.find(b => b.type === 'tool_use');
     if (!toolUseBlock) break;
@@ -194,7 +204,7 @@ app.post('/webhook', async (req, res) => {
     console.error('Handler error:', errMsg);
     try {
       const chatId = req.body?.message?.chat?.id;
-      if (chatId) await sendTelegram(chatId, 'Error: ' + errMsg);
+      if (chatId) await sendTelegram(chatId, '❌ Error: ' + errMsg);
     } catch(e) {}
   }
 });
