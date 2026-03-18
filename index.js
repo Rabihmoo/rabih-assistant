@@ -72,7 +72,7 @@ async function callClaude(messages) {
   const res = await axios.post(
     'https://api.anthropic.com/v1/messages',
     {
-      model: 'claude-3-5-haiku-20241022',
+      model: 'claude-3-haiku-20240307',
       max_tokens: 1024,
       system: buildSystemPrompt(),
       messages
