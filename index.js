@@ -100,7 +100,7 @@ async function executeTool(toolName, toolInput) {
   console.log('Executing tool:', toolName, JSON.stringify(toolInput));
   try {
     if (['read_emails', 'read_email_body', 'send_email'].includes(toolName)) return await handleGmailTool(toolName, toolInput);
-    if (['list_calendar_events', 'create_calendar_event'].includes(toolName)) return await handleCalendarTool(toolName, toolInput);
+    if (['list_calendar_events', 'create_calendar_event', 'delete_calendar_event'].includes(toolName)) return await handleCalendarTool(toolName, toolInput);
     if (['read_file', 'search_in_file', 'update_sheet_cell'].includes(toolName)) return await handleFilesTool(toolName, toolInput);
     if (['search_drive', 'list_drive_files', 'delete_drive_file'].includes(toolName)) return await handleDriveTool(toolName, toolInput);
     return { error: 'Unknown tool' };
