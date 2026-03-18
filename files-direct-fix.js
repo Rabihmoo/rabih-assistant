@@ -26,7 +26,6 @@ async function readFileByName(fileName, range) {
   const auth = getAuthClient();
   const files = await findFileByName(fileName);
   if (files.length === 0) return { error: `No file found matching "${fileName}"` };
-
   const file = files[0];
   const mimeType = file.mimeType;
   const drive = google.drive({ version: 'v3', auth });
@@ -42,9 +41,8 @@ async function readFileByName(fileName, range) {
     return { fileId: file.id, fileName: file.name, type: 'spreadsheet', rowCount: rows.length, rows };
   }
 
-  // Excel — export as CSV
-  if (mimeType.includes('excel') || mimeType.includes('spreadsheet') ||
-      file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv')) {
+  // Excel / CSV
+  if (mimeType.includes('excel') || mimeType.includes('spreadsheet') || file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv')) {
     const res = await drive.files.export(
       { fileId: file.id, mimeType: 'text/csv' },
       { responseType: 'arraybuffer' }
@@ -74,20 +72,38 @@ async function readFileByName(fileName, range) {
     return { fileId: file.id, fileName: file.name, type: 'document', text: text.substring(0, 5000) };
   }
 
-  return { error: `Cannot read file type: ${mimeType}`, fileName: file.name };
+  // Plain text / TXT — direct download
+  if (mimeType === 'text/plain' || file.name.endsWith('.txt') || mimeType.startsWith('text/')) {
+    const res = await drive.files.get(
+      { fileId: file.id, alt: 'media' },
+      { responseType: 'arraybuffer' }
+    );
+    const text = Buffer.from(res.data).toString('utf-8');
+    return { fileId: file.id, fileName: file.name, type: 'text', text: text.substring(0, 5000), totalChars: text.length };
+  }
+
+  // Fallback — try direct download for anything else
+  try {
+    const res = await drive.files.get(
+      { fileId: file.id, alt: 'media' },
+      { responseType: 'arraybuffer' }
+    );
+    const text = Buffer.from(res.data).toString('utf-8');
+    return { fileId: file.id, fileName: file.name, type: 'raw', text: text.substring(0, 5000) };
+  } catch (e) {
+    return { error: `Cannot read file type: ${mimeType}`, fileName: file.name, fileId: file.id };
+  }
 }
 
 async function searchInFile(fileName, query) {
   const content = await readFileByName(fileName);
   if (content.error) return content;
-
   let lines = [];
   if (content.rows) {
     lines = content.rows.map((r, i) => `Row ${i + 1}: ${Array.isArray(r) ? r.join(' | ') : r}`);
   } else if (content.text) {
     lines = content.text.split('\n');
   }
-
   const matches = lines.filter(l => l.toLowerCase().includes(query.toLowerCase()));
   return { fileName: content.fileName, query, matchCount: matches.length, matches: matches.slice(0, 30) };
 }
@@ -96,12 +112,10 @@ async function updateSheetCell(fileName, cell, value) {
   const auth = getAuthClient();
   const files = await findFileByName(fileName);
   if (files.length === 0) return { error: `No file found matching "${fileName}"` };
-
   const file = files[0];
   if (file.mimeType !== 'application/vnd.google-apps.spreadsheet') {
-    return { error: `"${file.name}" is not a Google Sheet. Can only edit Google Sheets — not Excel or PDF.` };
+    return { error: `"${file.name}" is not a Google Sheet.` };
   }
-
   const sheets = google.sheets({ version: 'v4', auth });
   await sheets.spreadsheets.values.update({
     spreadsheetId: file.id,
@@ -115,37 +129,37 @@ async function updateSheetCell(fileName, cell, value) {
 const filesTools = [
   {
     name: 'read_file',
-    description: "Read the full contents of any file in Google Drive — Google Sheets, Excel (.xlsx), PDF, Word docs. Returns all rows/text inside.",
+    description: "Read the full contents of any file in Google Drive — Google Sheets, Excel, PDF, Word, plain text (.txt), or any file. Returns all content.",
     input_schema: {
       type: 'object',
       properties: {
         file_name: { type: 'string', description: 'File name or partial name to find and read' },
-        range: { type: 'string', description: 'For spreadsheets only: cell range like A1:D50. Default reads full sheet.' }
+        range: { type: 'string', description: 'For spreadsheets only: cell range like A1:D50.' }
       },
       required: ['file_name']
     }
   },
   {
     name: 'search_in_file',
-    description: "Search for a name, value, or keyword inside a file (Excel, Google Sheet, PDF, Word).",
+    description: "Search for a keyword inside a file in Google Drive.",
     input_schema: {
       type: 'object',
       properties: {
         file_name: { type: 'string', description: 'File name to search inside' },
-        search_query: { type: 'string', description: 'Text or value to search for inside the file' }
+        search_query: { type: 'string', description: 'Text to search for inside the file' }
       },
       required: ['file_name', 'search_query']
     }
   },
   {
     name: 'update_sheet_cell',
-    description: "Update a cell value in a Google Sheet. Works only on Google Sheets (not Excel files).",
+    description: "Update a cell value in a Google Sheet.",
     input_schema: {
       type: 'object',
       properties: {
-        file_name: { type: 'string', description: 'Name of the Google Sheet to edit' },
-        cell: { type: 'string', description: 'Cell reference like B5 or range B5:B10' },
-        value: { type: 'string', description: 'New value to write into the cell' }
+        file_name: { type: 'string', description: 'Name of the Google Sheet' },
+        cell: { type: 'string', description: 'Cell reference like B5' },
+        value: { type: 'string', description: 'New value to write' }
       },
       required: ['file_name', 'cell', 'value']
     }
@@ -167,3 +181,10 @@ async function handleFilesTool(toolName, toolInput) {
 }
 
 module.exports = { filesTools, handleFilesTool };
+```
+
+Also add this line to the system prompt in `index.js` under TOOL USAGE RULES:
+```
+- You CAN read any file from Drive including .txt files — NEVER say you cannot read plain text files
+- You CAN delete calendar events — NEVER say you cannot delete events
+- You have FULL authority over Gmail, Calendar, and Drive — execute everything directly
