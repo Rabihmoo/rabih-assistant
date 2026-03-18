@@ -21,44 +21,60 @@ function buildSystemPrompt() {
 Today is ${today}, current time is ${time} (Maputo time, UTC+2).
 About Rabih:
 - Lebanese businessman based in Maputo, Mozambique
-- Runs Rabih Group: BBQ House LDA, SALT LDA (restaurant/bar), Central Kitchen LDA, Executive Cleaning Services
+- Runs Rabih Group: BBQ House LDA, SALT LDA, Central Kitchen LDA, Executive Cleaning Services
 - Also owns Burgerury burger brand in Beirut, Lebanon
 - Speaks English and Arabic, sometimes mixes both
-- Direct person — get things done, no unnecessary questions
+- Direct person, get things done, no unnecessary questions
 Your personality:
 - Real personal assistant, like a top-tier human EA
 - Concise, direct, warm
 - Remember everything from the conversation
-- Reply in the same language Rabih uses (English or Arabic)
+- Reply in the same language Rabih uses
 - Never say you are an AI unless directly asked`;
 }
 
 async function loadHistory(chatId) {
-  const { data, error } = await supabase
-    .from('assistant_messages')
-    .select('role, content, created_at')
-    .eq('chat_id', String(chatId))
-    .order('created_at', { ascending: false })
-    .limit(30);
-  if (error) { console.error('Load history error:', error); return []; }
-  return (data || []).reverse().map(r => ({ role: r.role, content: r.content }));
+  try {
+    const { data, error } = await supabase
+      .from('assistant_messages')
+      .select('role, content, created_at')
+      .eq('chat_id', String(chatId))
+      .order('created_at', { ascending: false })
+      .limit(30);
+    if (error) { console.error('Load history error:', error.message); return []; }
+    return (data || []).reverse().map(r => ({ role: r.role, content: r.content }));
+  } catch(e) {
+    console.error('Load history exception:', e.message);
+    return [];
+  }
 }
 
 async function saveMessages(chatId, userText, assistantReply) {
-  const rows = [
-    { chat_id: String(chatId), role: 'user',      content: userText },
-    { chat_id: String(chatId), role: 'assistant', content: assistantReply }
-  ];
-  const { error } = await supabase.from('assistant_messages').insert(rows);
-  if (error) console.error('Save messages error:', error);
+  try {
+    const rows = [
+      { chat_id: String(chatId), role: 'user', content: userText },
+      { chat_id: String(chatId), role: 'assistant', content: assistantReply }
+    ];
+    const { error } = await supabase.from('assistant_messages').insert(rows);
+    if (error) console.error('Save error:', error.message);
+    else console.log('Messages saved OK');
+  } catch(e) {
+    console.error('Save exception:', e.message);
+  }
 }
 
 async function sendTelegram(chatId, text) {
   const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
   try {
     await axios.post(url, { chat_id: chatId, text, parse_mode: 'Markdown' });
+    console.log('Telegram reply sent OK');
   } catch(e) {
-    await axios.post(url, { chat_id: chatId, text }).catch(()=>{});
+    try {
+      await axios.post(url, { chat_id: chatId, text });
+      console.log('Telegram reply sent OK (plain)');
+    } catch(e2) {
+      console.error('Telegram send failed:', e2.message);
+    }
   }
 }
 
@@ -69,6 +85,7 @@ async function sendTyping(chatId) {
 }
 
 async function callClaude(messages) {
+  console.log('Calling Claude with', messages.length, 'messages...');
   const res = await axios.post(
     'https://api.anthropic.com/v1/messages',
     {
@@ -82,21 +99,22 @@ async function callClaude(messages) {
         'x-api-key': ANTHROPIC_KEY,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json'
-      }
+      },
+      timeout: 30000
     }
   );
+  console.log('Claude responded OK');
   return res.data;
 }
 
 async function handleMessage(chatId, userText) {
   await sendTyping(chatId);
   const history = await loadHistory(chatId);
+  console.log('History loaded:', history.length, 'messages');
   const messages = [...history, { role: 'user', content: userText }];
-
   const response = await callClaude(messages);
   const textBlock = response.content.find(b => b.type === 'text');
   const finalReply = textBlock?.text || 'Done!';
-
   await sendTelegram(chatId, finalReply);
   await saveMessages(chatId, userText, finalReply);
 }
@@ -111,7 +129,13 @@ app.post('/webhook', async (req, res) => {
     console.log(`[${chatId}] ${userText}`);
     await handleMessage(chatId, userText);
   } catch (err) {
-    console.error('Handler error:', err.response?.data || err.message);
+    const errMsg = err.response?.data?.error?.message || err.message || 'Unknown error';
+    console.error('Handler error:', errMsg);
+    console.error('Full error:', JSON.stringify(err.response?.data || err.message));
+    try {
+      const chatId = req.body?.message?.chat?.id;
+      if (chatId) await sendTelegram(chatId, 'Error: ' + errMsg);
+    } catch(e) {}
   }
 });
 
