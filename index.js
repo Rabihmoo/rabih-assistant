@@ -4,6 +4,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { gmailTools, handleGmailTool } = require('./gmail-direct-fix');
 const { calendarTools, handleCalendarTool } = require('./calendar-direct-fix');
 const { driveTools, handleDriveTool } = require('./drive-direct-fix');
+const { filesTools, handleFilesTool } = require('./files-direct-fix');
 
 const app = express();
 app.use(express.json());
@@ -51,7 +52,7 @@ DATA RULES:
 - If results are empty, say exactly that`;
 }
 
-const TOOLS = [...calendarTools, ...gmailTools, ...driveTools];
+const TOOLS = [...calendarTools, ...gmailTools, ...driveTools, ...filesTools];
 
 async function loadHistory(chatId) {
   try {
@@ -115,6 +116,11 @@ async function executeTool(toolName, toolInput) {
     if (['list_calendar_events', 'create_calendar_event'].includes(toolName)) {
       const result = await handleCalendarTool(toolName, toolInput);
       console.log('Calendar result:', JSON.stringify(result));
+      return result;
+    }
+    if (['read_file', 'search_in_file', 'update_sheet_cell'].includes(toolName)) {
+      const result = await handleFilesTool(toolName, toolInput);
+      console.log('Files result:', JSON.stringify(result));
       return result;
     }
     if (['search_drive', 'list_drive_files', 'delete_drive_file'].includes(toolName)) {
