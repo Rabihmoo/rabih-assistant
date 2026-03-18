@@ -21,31 +21,39 @@ function buildSystemPrompt() {
   const now = new Date();
   const today = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  return `You are the personal AI assistant of Rabih Barakat. You work for him full-time. Today is ${today}, current time is ${time} (Maputo time, UTC+2).
-
-About Rabih:
-- Lebanese businessman, owner of Rabih Group based in Maputo, Mozambique
-- Owns: BBQ House LDA, SALT LDA (restaurant/bar), Central Kitchen LDA, Executive Cleaning Services
-- Also owns Burgerury burger brand in Beirut, Lebanon
-- Speaks English and Arabic, sometimes mixes both
-- Direct person, gets things done, no unnecessary questions
-
-Your personality:
-- Real personal assistant, like a top-tier human EA
-- Concise, direct, warm
-- Reply in the same language Rabih uses
-- Never say you are an AI unless directly asked
-
-TOOL USAGE RULES:
-- ALWAYS use tools to complete requests
-- NEVER confirm success unless the tool returned success:true or a valid result
-- If a tool fails, tell Rabih exactly what failed
-- If you cannot do something, say so directly
-
-DATA RULES:
-- NEVER invent or fabricate emails, events, files, or any data
-- Only report what tools actually returned
-- If results are empty, say exactly that`;
+  const lines = [
+    'You are the personal AI assistant of Rabih Barakat. You work for him full-time.',
+    'Today is ' + today + ', current time is ' + time + ' (Maputo time, UTC+2).',
+    '',
+    'About Rabih:',
+    '- Lebanese businessman, owner of Rabih Group based in Maputo, Mozambique',
+    '- Owns: BBQ House LDA, SALT LDA (restaurant/bar), Central Kitchen LDA, Executive Cleaning Services',
+    '- Also owns Burgerury burger brand in Beirut, Lebanon',
+    '- Speaks English and Arabic, sometimes mixes both',
+    '- Direct person, gets things done, no unnecessary questions',
+    '',
+    'Your personality:',
+    '- Real personal assistant, like a top-tier human EA',
+    '- Concise, direct, warm',
+    '- Reply in the same language Rabih uses',
+    '- Never say you are an AI unless directly asked',
+    '',
+    'TOOL USAGE RULES:',
+    '- ALWAYS use tools to complete requests - NEVER skip a tool call',
+    '- NEVER confirm success unless the tool returned success:true or a valid result',
+    '- If a tool fails, tell Rabih exactly what failed',
+    '- You have FULL authority over Gmail, Calendar, and Drive',
+    '- You CAN delete calendar events - use delete_calendar_event tool',
+    '- You CAN read ANY file from Drive including .txt files',
+    '- You CAN send emails with content from files',
+    '- NEVER say you cannot do something that your tools support',
+    '',
+    'DATA RULES:',
+    '- NEVER invent or fabricate emails, events, files, or any data',
+    '- Only report what tools actually returned',
+    '- If results are empty, say exactly that'
+  ];
+  return lines.join('\n');
 }
 
 const TOOLS = [...calendarTools, ...gmailTools, ...driveTools, ...filesTools];
@@ -54,14 +62,10 @@ async function saveMessage(chatId, role, content) {
   try {
     const contentToStore = typeof content === 'string' ? content : JSON.stringify(content);
     const { error } = await supabase.from('assistant_messages').insert({
-      chat_id: String(chatId),
-      role,
-      content: contentToStore
+      chat_id: String(chatId), role, content: contentToStore
     });
     if (error) console.error('Save error:', error.message);
-  } catch (e) {
-    console.error('Save exception:', e.message);
-  }
+  } catch (e) { console.error('Save exception:', e.message); }
 }
 
 async function loadHistory(chatId) {
@@ -77,14 +81,11 @@ async function loadHistory(chatId) {
       role: r.role,
       content: (() => { try { return JSON.parse(r.content); } catch { return r.content; } })()
     }));
-  } catch (e) {
-    console.error('Load history exception:', e.message);
-    return [];
-  }
+  } catch (e) { console.error('Load history exception:', e.message); return []; }
 }
 
 async function sendTelegram(chatId, text) {
-  const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
+  const url = 'https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendMessage';
   try {
     await axios.post(url, { chat_id: chatId, text, parse_mode: 'Markdown' });
   } catch (e) {
@@ -93,7 +94,7 @@ async function sendTelegram(chatId, text) {
 }
 
 async function sendTyping(chatId) {
-  await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendChatAction`, { chat_id: chatId, action: 'typing' }).catch(() => {});
+  await axios.post('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
 }
 
 async function executeTool(toolName, toolInput) {
@@ -104,10 +105,7 @@ async function executeTool(toolName, toolInput) {
     if (['read_file', 'search_in_file', 'update_sheet_cell'].includes(toolName)) return await handleFilesTool(toolName, toolInput);
     if (['search_drive', 'list_drive_files', 'delete_drive_file'].includes(toolName)) return await handleDriveTool(toolName, toolInput);
     return { error: 'Unknown tool' };
-  } catch (e) {
-    console.error('Tool error:', e.message);
-    return { error: e.message };
-  }
+  } catch (e) { console.error('Tool error:', e.message); return { error: e.message }; }
 }
 
 async function callClaude(messages) {
@@ -127,45 +125,31 @@ async function handleMessage(chatId, userText) {
     await sendTelegram(chatId, 'Memory cleared. Fresh start!');
     return;
   }
-
   await sendTyping(chatId);
   await saveMessage(chatId, 'user', userText);
-
   const history = await loadHistory(chatId);
   console.log('History loaded:', history.length, 'messages');
   const messages = [...history];
-
   let response = await callClaude(messages);
   let rounds = 0;
-
   while (response.stop_reason === 'tool_use' && rounds < 5) {
     rounds++;
     const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
     if (!toolUseBlocks.length) break;
-
     await sendTyping(chatId);
-
-    // Save assistant tool_use to Supabase
     await saveMessage(chatId, 'assistant', response.content);
     messages.push({ role: 'assistant', content: response.content });
-
-    // Execute all tools
     const toolResults = [];
     for (const toolUse of toolUseBlocks) {
       const result = await executeTool(toolUse.name, toolUse.input);
       toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
     }
-
-    // Save tool_result as user role — THE FIX
     await saveMessage(chatId, 'user', toolResults);
     messages.push({ role: 'user', content: toolResults });
-
     response = await callClaude(messages);
   }
-
   const textBlock = response.content.find(b => b.type === 'text');
-  const finalReply = textBlock?.text || 'Done!';
-
+  const finalReply = textBlock ? textBlock.text : 'Done!';
   await saveMessage(chatId, 'assistant', finalReply);
   await sendTelegram(chatId, finalReply);
 }
@@ -173,16 +157,16 @@ async function handleMessage(chatId, userText) {
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
   try {
-    const msg = req.body?.message;
-    if (!msg?.text) return;
-    console.log(`[${msg.chat.id}] ${msg.text}`);
+    const msg = req.body && req.body.message;
+    if (!msg || !msg.text) return;
+    console.log('[' + msg.chat.id + '] ' + msg.text);
     await handleMessage(msg.chat.id, msg.text);
   } catch (err) {
-    const errMsg = err.response?.data?.error?.message || err.message || 'Unknown error';
+    const errMsg = (err.response && err.response.data && err.response.data.error && err.response.data.error.message) || err.message || 'Unknown error';
     console.error('Handler error:', errMsg);
-    try { const chatId = req.body?.message?.chat?.id; if (chatId) await sendTelegram(chatId, 'Error: ' + errMsg); } catch (e) {}
+    try { const chatId = req.body && req.body.message && req.body.message.chat && req.body.message.chat.id; if (chatId) await sendTelegram(chatId, 'Error: ' + errMsg); } catch (e) {}
   }
 });
 
 app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running', tools: 'enabled' }));
-app.listen(PORT, () => console.log(`Rabih Assistant listening on port ${PORT}`));
+app.listen(PORT, () => console.log('Rabih Assistant listening on port ' + PORT));
