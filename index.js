@@ -21,39 +21,42 @@ function buildSystemPrompt() {
   const now = new Date();
   const today = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  const lines = [
+  const parts = [
     'You are the personal AI assistant of Rabih Barakat. You work for him full-time.',
     'Today is ' + today + ', current time is ' + time + ' (Maputo time, UTC+2).',
     '',
     'About Rabih:',
-    '- Lebanese businessman, owner of Rabih Group based in Maputo, Mozambique',
-    '- Owns: BBQ House LDA, SALT LDA (restaurant/bar), Central Kitchen LDA, Executive Cleaning Services',
+    '- Lebanese businessman based in Maputo, Mozambique',
+    '- Owns: BBQ House LDA, SALT LDA, Central Kitchen LDA, Executive Cleaning Services',
     '- Also owns Burgerury burger brand in Beirut, Lebanon',
     '- Speaks English and Arabic, sometimes mixes both',
-    '- Direct person, gets things done, no unnecessary questions',
+    '- Direct person, no unnecessary questions',
     '',
     'Your personality:',
-    '- Real personal assistant, like a top-tier human EA',
-    '- Concise, direct, warm',
+    '- Top-tier personal assistant, concise and direct',
     '- Reply in the same language Rabih uses',
     '- Never say you are an AI unless directly asked',
     '',
-    'TOOL USAGE RULES:',
-    '- ALWAYS use tools to complete requests - NEVER skip a tool call',
-    '- NEVER confirm success unless the tool returned success:true or a valid result',
-    '- If a tool fails, tell Rabih exactly what failed',
-    '- You have FULL authority over Gmail, Calendar, and Drive',
-    '- You CAN delete calendar events - use delete_calendar_event tool',
-    '- You CAN read ANY file from Drive including .txt files',
-    '- You CAN send emails with content from files',
+    'TOOL RULES - CRITICAL:',
+    '- ALWAYS use tools immediately, never ask for confirmation first',
+    '- When asked to get/show/read a file: call read_file and show the FULL CONTENT directly in chat',
+    '- NEVER say you cannot read a file - just call read_file and return the content',
+    '- When asked to delete an event: call delete_calendar_event immediately',
+    '- When asked to send an email: call send_email immediately',
+    '- When asked to delete a file: call delete_drive_file immediately',
+    '- NEVER ask clarifying questions before acting - just do it',
     '- NEVER say you cannot do something that your tools support',
+    '- If a tool fails, report the exact error',
+    '',
+    'FILE DISPLAY RULE:',
+    '- When you read a file, always paste the full text content directly in your reply',
+    '- Do not just say the filename - show the actual content',
     '',
     'DATA RULES:',
-    '- NEVER invent or fabricate emails, events, files, or any data',
-    '- Only report what tools actually returned',
-    '- If results are empty, say exactly that'
+    '- NEVER invent or fabricate data',
+    '- Only report what tools actually returned'
   ];
-  return lines.join('\n');
+  return parts.join('\n');
 }
 
 const TOOLS = [...calendarTools, ...gmailTools, ...driveTools, ...filesTools];
@@ -62,7 +65,7 @@ async function saveMessage(chatId, role, content) {
   try {
     const contentToStore = typeof content === 'string' ? content : JSON.stringify(content);
     const { error } = await supabase.from('assistant_messages').insert({
-      chat_id: String(chatId), role, content: contentToStore
+      chat_id: String(chatId), role: role, content: contentToStore
     });
     if (error) console.error('Save error:', error.message);
   } catch (e) { console.error('Save exception:', e.message); }
@@ -77,24 +80,26 @@ async function loadHistory(chatId) {
       .order('created_at', { ascending: false })
       .limit(30);
     if (error) { console.error('Load history error:', error.message); return []; }
-    return (data || []).reverse().map(r => ({
-      role: r.role,
-      content: (() => { try { return JSON.parse(r.content); } catch { return r.content; } })()
-    }));
+    return (data || []).reverse().map(function(r) {
+      return {
+        role: r.role,
+        content: (function() { try { return JSON.parse(r.content); } catch(e) { return r.content; } })()
+      };
+    });
   } catch (e) { console.error('Load history exception:', e.message); return []; }
 }
 
 async function sendTelegram(chatId, text) {
   const url = 'https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendMessage';
   try {
-    await axios.post(url, { chat_id: chatId, text, parse_mode: 'Markdown' });
+    await axios.post(url, { chat_id: chatId, text: text, parse_mode: 'Markdown' });
   } catch (e) {
-    try { await axios.post(url, { chat_id: chatId, text }); } catch (e2) { console.error('Telegram failed:', e2.message); }
+    try { await axios.post(url, { chat_id: chatId, text: text }); } catch (e2) { console.error('Telegram failed:', e2.message); }
   }
 }
 
 async function sendTyping(chatId) {
-  await axios.post('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
+  await axios.post('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendChatAction', { chat_id: chatId, action: 'typing' }).catch(function() {});
 }
 
 async function executeTool(toolName, toolInput) {
@@ -112,7 +117,7 @@ async function callClaude(messages) {
   console.log('Calling Claude with', messages.length, 'messages...');
   const res = await axios.post(
     'https://api.anthropic.com/v1/messages',
-    { model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system: buildSystemPrompt(), tools: TOOLS, messages },
+    { model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system: buildSystemPrompt(), tools: TOOLS, messages: messages },
     { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 30000 }
   );
   console.log('Claude stop_reason:', res.data.stop_reason);
@@ -128,19 +133,19 @@ async function handleMessage(chatId, userText) {
   await sendTyping(chatId);
   await saveMessage(chatId, 'user', userText);
   const history = await loadHistory(chatId);
-  console.log('History loaded:', history.length, 'messages');
   const messages = [...history];
   let response = await callClaude(messages);
   let rounds = 0;
   while (response.stop_reason === 'tool_use' && rounds < 5) {
     rounds++;
-    const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
+    const toolUseBlocks = response.content.filter(function(b) { return b.type === 'tool_use'; });
     if (!toolUseBlocks.length) break;
     await sendTyping(chatId);
     await saveMessage(chatId, 'assistant', response.content);
     messages.push({ role: 'assistant', content: response.content });
     const toolResults = [];
-    for (const toolUse of toolUseBlocks) {
+    for (let i = 0; i < toolUseBlocks.length; i++) {
+      const toolUse = toolUseBlocks[i];
       const result = await executeTool(toolUse.name, toolUse.input);
       toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
     }
@@ -148,13 +153,13 @@ async function handleMessage(chatId, userText) {
     messages.push({ role: 'user', content: toolResults });
     response = await callClaude(messages);
   }
-  const textBlock = response.content.find(b => b.type === 'text');
+  const textBlock = response.content.find(function(b) { return b.type === 'text'; });
   const finalReply = textBlock ? textBlock.text : 'Done!';
   await saveMessage(chatId, 'assistant', finalReply);
   await sendTelegram(chatId, finalReply);
 }
 
-app.post('/webhook', async (req, res) => {
+app.post('/webhook', async function(req, res) {
   res.sendStatus(200);
   try {
     const msg = req.body && req.body.message;
@@ -164,9 +169,12 @@ app.post('/webhook', async (req, res) => {
   } catch (err) {
     const errMsg = (err.response && err.response.data && err.response.data.error && err.response.data.error.message) || err.message || 'Unknown error';
     console.error('Handler error:', errMsg);
-    try { const chatId = req.body && req.body.message && req.body.message.chat && req.body.message.chat.id; if (chatId) await sendTelegram(chatId, 'Error: ' + errMsg); } catch (e) {}
+    try {
+      const chatId = req.body && req.body.message && req.body.message.chat && req.body.message.chat.id;
+      if (chatId) await sendTelegram(chatId, 'Error: ' + errMsg);
+    } catch(e) {}
   }
 });
 
-app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running', tools: 'enabled' }));
-app.listen(PORT, () => console.log('Rabih Assistant listening on port ' + PORT));
+app.get('/', function(req, res) { res.json({ status: 'Rabih Assistant running', tools: 'enabled' }); });
+app.listen(PORT, function() { console.log('Rabih Assistant listening on port ' + PORT); });
