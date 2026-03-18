@@ -21,7 +21,6 @@ async function listCalendarEvents(daysAhead = 7) {
 
   const allItems = [];
 
-  // Fetch calendar events from ALL calendars
   try {
     const calList = await calendar.calendarList.list();
     for (const cal of (calList.data.items || [])) {
@@ -53,7 +52,6 @@ async function listCalendarEvents(daysAhead = 7) {
     console.log('Calendar list error:', err.message);
   }
 
-  // Fetch tasks from ALL task lists
   try {
     const taskLists = await tasks.tasklists.list();
     for (const tl of (taskLists.data.items || [])) {
@@ -86,7 +84,6 @@ async function listCalendarEvents(daysAhead = 7) {
     console.log('Tasks list error:', err.message);
   }
 
-  // Sort by start time
   allItems.sort((a, b) => {
     if (!a.start) return 1;
     if (!b.start) return -1;
@@ -99,14 +96,20 @@ async function listCalendarEvents(daysAhead = 7) {
 async function createCalendarEvent(title, date, time, durationMinutes = 60) {
   const auth = getAuthClient();
   const calendar = google.calendar({ version: 'v3', auth });
-  const startDateTime = new Date(`${date}T${time}:00`);
-  const endDateTime = new Date(startDateTime.getTime() + durationMinutes * 60000);
+
+  // Build ISO string with Maputo offset (+02:00) to avoid UTC conversion errors
+  const startISO = `${date}T${time}:00+02:00`;
+  const startMs = new Date(startISO).getTime();
+  const endMs = startMs + durationMinutes * 60000;
+  const endISO = new Date(endMs).toISOString().replace('Z', '+02:00').replace(/\.\d{3}/, '');
+
   const event = {
     summary: title,
-    start: { dateTime: startDateTime.toISOString(), timeZone: 'Africa/Maputo' },
-    end: { dateTime: endDateTime.toISOString(), timeZone: 'Africa/Maputo' },
+    start: { dateTime: startISO, timeZone: 'Africa/Maputo' },
+    end: { dateTime: endISO, timeZone: 'Africa/Maputo' },
     reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 30 }] },
   };
+
   const res = await calendar.events.insert({ calendarId: 'primary', requestBody: event });
   return { success: true, eventId: res.data.id, title, start: res.data.start.dateTime };
 }
@@ -123,13 +126,13 @@ const calendarTools = [
   },
   {
     name: 'create_calendar_event',
-    description: "Create an event or reminder in Rabih's Google Calendar.",
+    description: "Create an event or reminder in Rabih's Google Calendar. Always use Maputo time (UTC+2).",
     input_schema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Event title' },
         date: { type: 'string', description: 'Date in YYYY-MM-DD format' },
-        time: { type: 'string', description: 'Time in HH:MM 24h format' },
+        time: { type: 'string', description: 'Time in HH:MM 24h format (Maputo time UTC+2)' },
         duration_minutes: { type: 'number', description: 'Duration in minutes, default 60' },
         is_reminder: { type: 'boolean', description: 'True if this is a reminder' }
       },
