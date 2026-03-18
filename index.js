@@ -145,15 +145,18 @@ async function handleMessage(chatId, userText) {
 
     await sendTyping(chatId);
 
+    // Save assistant tool_use to Supabase
     await saveMessage(chatId, 'assistant', response.content);
     messages.push({ role: 'assistant', content: response.content });
 
+    // Execute all tools
     const toolResults = [];
     for (const toolUse of toolUseBlocks) {
       const result = await executeTool(toolUse.name, toolUse.input);
       toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
     }
 
+    // Save tool_result as user role — THE FIX
     await saveMessage(chatId, 'user', toolResults);
     messages.push({ role: 'user', content: toolResults });
 
