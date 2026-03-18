@@ -5,11 +5,12 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 app.use(express.json());
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const ANTHROPIC_KEY  = process.env.ANTHROPIC_KEY;
-const SUPABASE_URL   = process.env.SUPABASE_URL;
-const SUPABASE_KEY   = process.env.SUPABASE_SERVICE_KEY;
-const PORT           = process.env.PORT || 3000;
+const TELEGRAM_TOKEN    = process.env.TELEGRAM_TOKEN;
+const ANTHROPIC_KEY     = process.env.ANTHROPIC_KEY;
+const SUPABASE_URL      = process.env.SUPABASE_URL;
+const SUPABASE_KEY      = process.env.SUPABASE_SERVICE_KEY;
+const N8N_TOOL_WEBHOOK  = process.env.N8N_TOOL_WEBHOOK;
+const PORT              = process.env.PORT || 3000;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -21,7 +22,7 @@ function buildSystemPrompt() {
 Today is ${today}, current time is ${time} (Maputo time, UTC+2).
 About Rabih:
 - Lebanese businessman based in Maputo, Mozambique
-- Runs Rabih Group: BBQ House LDA, SALT LDA, Central Kitchen LDA, Executive Cleaning Services
+- Runs Rabih Group: BBQ House LDA, SALT LDA (restaurant/bar), Central Kitchen LDA, Executive Cleaning Services
 - Also owns Burgerury burger brand in Beirut, Lebanon
 - Speaks English and Arabic, sometimes mixes both
 - Direct person, get things done, no unnecessary questions
@@ -30,8 +31,76 @@ Your personality:
 - Concise, direct, warm
 - Remember everything from the conversation
 - Reply in the same language Rabih uses
-- Never say you are an AI unless directly asked`;
+- Never say you are an AI unless directly asked
+- When using tools, confirm what you did in a natural way`;
 }
+
+const TOOLS = [
+  {
+    name: 'create_calendar_event',
+    description: 'Create an event or reminder in Google Calendar.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title:            { type: 'string',  description: 'Event title' },
+        date:             { type: 'string',  description: 'Date in YYYY-MM-DD format' },
+        time:             { type: 'string',  description: 'Time in HH:MM 24h format' },
+        duration_minutes: { type: 'number',  description: 'Duration in minutes, default 60' },
+        is_reminder:      { type: 'boolean', description: 'True if this is a reminder' }
+      },
+      required: ['title', 'date', 'time']
+    }
+  },
+  {
+    name: 'list_calendar_events',
+    description: 'List upcoming calendar events.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        days_ahead: { type: 'number', description: 'How many days ahead to look, default 7' }
+      }
+    }
+  },
+  {
+    name: 'send_email',
+    description: 'Send an email via Gmail.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        to:      { type: 'string', description: 'Recipient email' },
+        subject: { type: 'string', description: 'Subject line' },
+        body:    { type: 'string', description: 'Email body' }
+      },
+      required: ['to', 'subject', 'body']
+    }
+  },
+  {
+    name: 'read_emails',
+    description: 'Read recent emails from inbox.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Number of emails, default 5' }
+      }
+    }
+  },
+  {
+    name: 'search_drive',
+    description: 'Search for files in Google Drive.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search term or filename' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'list_drive_files',
+    description: 'List recent files in Google Drive.',
+    input_schema: { type: 'object', properties: {} }
+  }
+];
 
 async function loadHistory(chatId) {
   try {
@@ -52,7 +121,7 @@ async function loadHistory(chatId) {
 async function saveMessages(chatId, userText, assistantReply) {
   try {
     const rows = [
-      { chat_id: String(chatId), role: 'user', content: userText },
+      { chat_id: String(chatId), role: 'user',      content: userText },
       { chat_id: String(chatId), role: 'assistant', content: assistantReply }
     ];
     const { error } = await supabase.from('assistant_messages').insert(rows);
@@ -84,6 +153,18 @@ async function sendTyping(chatId) {
   }).catch(() => {});
 }
 
+async function executeTool(toolName, toolInput) {
+  console.log('Executing tool:', toolName, JSON.stringify(toolInput));
+  try {
+    const res = await axios.post(N8N_TOOL_WEBHOOK, { tool: toolName, input: toolInput }, { timeout: 20000 });
+    console.log('Tool result:', JSON.stringify(res.data));
+    return res.data;
+  } catch(e) {
+    console.error('Tool error:', e.message);
+    return { error: e.message };
+  }
+}
+
 async function callClaude(messages) {
   console.log('Calling Claude with', messages.length, 'messages...');
   const res = await axios.post(
@@ -92,6 +173,7 @@ async function callClaude(messages) {
       model: 'claude-3-haiku-20240307',
       max_tokens: 1024,
       system: buildSystemPrompt(),
+      tools: TOOLS,
       messages
     },
     {
@@ -103,7 +185,7 @@ async function callClaude(messages) {
       timeout: 30000
     }
   );
-  console.log('Claude responded OK');
+  console.log('Claude responded, stop_reason:', res.data.stop_reason);
   return res.data;
 }
 
@@ -111,10 +193,36 @@ async function handleMessage(chatId, userText) {
   await sendTyping(chatId);
   const history = await loadHistory(chatId);
   console.log('History loaded:', history.length, 'messages');
+
   const messages = [...history, { role: 'user', content: userText }];
-  const response = await callClaude(messages);
+  let response = await callClaude(messages);
+  let finalReply = '';
+
+  let rounds = 0;
+  while (response.stop_reason === 'tool_use' && rounds < 3) {
+    rounds++;
+    const toolUseBlock = response.content.find(b => b.type === 'tool_use');
+    if (!toolUseBlock) break;
+
+    await sendTyping(chatId);
+    const toolResult = await executeTool(toolUseBlock.name, toolUseBlock.input);
+
+    messages.push({ role: 'assistant', content: response.content });
+    messages.push({
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: toolUseBlock.id,
+        content: JSON.stringify(toolResult)
+      }]
+    });
+
+    response = await callClaude(messages);
+  }
+
   const textBlock = response.content.find(b => b.type === 'text');
-  const finalReply = textBlock?.text || 'Done!';
+  finalReply = textBlock?.text || 'Done!';
+
   await sendTelegram(chatId, finalReply);
   await saveMessages(chatId, userText, finalReply);
 }
@@ -139,6 +247,6 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running' }));
+app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running', tools: 'enabled' }));
 
 app.listen(PORT, () => console.log(`Rabih Assistant listening on port ${PORT}`));
