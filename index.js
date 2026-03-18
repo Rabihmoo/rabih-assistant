@@ -146,3 +146,4 @@ async function handleMessage(chatId, userText) {
       await sendTyping(chatId);
 
       await saveMessage(chatId, 'assista
+                        
