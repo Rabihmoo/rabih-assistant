@@ -3,6 +3,7 @@ const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 const { gmailTools, handleGmailTool } = require('./gmail-direct-fix');
 const { calendarTools, handleCalendarTool } = require('./calendar-direct-fix');
+const { driveTools, handleDriveTool } = require('./drive-direct-fix');
 
 const app = express();
 app.use(express.json());
@@ -11,7 +12,6 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
-const N8N_TOOL_WEBHOOK = process.env.N8N_TOOL_WEBHOOK;
 const PORT = process.env.PORT || 3000;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -38,30 +38,13 @@ Your personality:
 
 CRITICAL RULES:
 - NEVER invent, fabricate or make up emails, calendar events, files or any data
-- If a tool returns empty results, say exactly that: "Your inbox is empty" or "No events this week"
+- If a tool returns empty results, say exactly that: "Your inbox is empty" or "No events this week" or "No files found"
 - If a tool fails, say: "I had trouble accessing that, please try again"
 - Only report what the tool actually returned
 - Never show example or fake data under any circumstances`;
 }
 
-const N8N_TOOLS = [
-  {
-    name: 'search_drive',
-    description: 'Search for files in Google Drive.',
-    input_schema: {
-      type: 'object',
-      properties: { query: { type: 'string', description: 'Search term or filename' } },
-      required: ['query']
-    }
-  },
-  {
-    name: 'list_drive_files',
-    description: 'List recent files in Google Drive.',
-    input_schema: { type: 'object', properties: {} }
-  }
-];
-
-const TOOLS = [...calendarTools, ...gmailTools, ...N8N_TOOLS];
+const TOOLS = [...calendarTools, ...gmailTools, ...driveTools];
 
 async function loadHistory(chatId) {
   try {
@@ -127,9 +110,12 @@ async function executeTool(toolName, toolInput) {
       console.log('Calendar tool result:', JSON.stringify(result));
       return result;
     }
-    const res = await axios.post(N8N_TOOL_WEBHOOK, { tool: toolName, input: toolInput }, { timeout: 20000 });
-    console.log('Tool result:', JSON.stringify(res.data));
-    return res.data;
+    if (['search_drive', 'list_drive_files'].includes(toolName)) {
+      const result = await handleDriveTool(toolName, toolInput);
+      console.log('Drive tool result:', JSON.stringify(result));
+      return result;
+    }
+    return { error: 'Unknown tool', empty: true };
   } catch(e) {
     console.error('Tool error:', e.message);
     return { error: e.message, empty: true };
@@ -202,7 +188,6 @@ app.post('/webhook', async (req, res) => {
   } catch (err) {
     const errMsg = err.response?.data?.error?.message || err.message || 'Unknown error';
     console.error('Handler error:', errMsg);
-    console.error('Full error:', JSON.stringify(err.response?.data || err.message));
     try {
       const chatId = req.body?.message?.chat?.id;
       if (chatId) await sendTelegram(chatId, 'Error: ' + errMsg);
