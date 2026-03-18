@@ -1,25 +1,26 @@
 const express = require('express');
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
+const { gmailTools, handleGmailTool } = require('./gmail-direct-fix');
 
 const app = express();
 app.use(express.json());
 
-const TELEGRAM_TOKEN    = process.env.TELEGRAM_TOKEN;
-const ANTHROPIC_KEY     = process.env.ANTHROPIC_KEY;
-const SUPABASE_URL      = process.env.SUPABASE_URL;
-const SUPABASE_KEY      = process.env.SUPABASE_SERVICE_KEY;
-const N8N_TOOL_WEBHOOK  = process.env.N8N_TOOL_WEBHOOK;
-const PORT              = process.env.PORT || 3000;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
+const N8N_TOOL_WEBHOOK = process.env.N8N_TOOL_WEBHOOK;
+const PORT = process.env.PORT || 3000;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 function buildSystemPrompt() {
-  const now   = new Date();
+  const now = new Date();
   const today = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  const time  = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  return `You are the personal AI assistant of Rabih. You work for him full-time.
-Today is ${today}, current time is ${time} (Maputo time, UTC+2).
+  const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return `You are the personal AI assistant of Rabih. You work for him full-time. Today is ${today}, current time is ${time} (Maputo time, UTC+2).
+
 About Rabih:
 - Lebanese businessman, owner of Rabih Group based in Maputo, Mozambique
 - Owns: BBQ House LDA, SALT LDA (restaurant/bar), Central Kitchen LDA, Executive Cleaning Services
@@ -42,18 +43,18 @@ CRITICAL RULES:
 - Never show example or fake data under any circumstances`;
 }
 
-const TOOLS = [
+const N8N_TOOLS = [
   {
     name: 'create_calendar_event',
     description: 'Create an event or reminder in Google Calendar.',
     input_schema: {
       type: 'object',
       properties: {
-        title:            { type: 'string',  description: 'Event title' },
-        date:             { type: 'string',  description: 'Date in YYYY-MM-DD format' },
-        time:             { type: 'string',  description: 'Time in HH:MM 24h format' },
-        duration_minutes: { type: 'number',  description: 'Duration in minutes, default 60' },
-        is_reminder:      { type: 'boolean', description: 'True if this is a reminder' }
+        title: { type: 'string', description: 'Event title' },
+        date: { type: 'string', description: 'Date in YYYY-MM-DD format' },
+        time: { type: 'string', description: 'Time in HH:MM 24h format' },
+        duration_minutes: { type: 'number', description: 'Duration in minutes, default 60' },
+        is_reminder: { type: 'boolean', description: 'True if this is a reminder' }
       },
       required: ['title', 'date', 'time']
     }
@@ -65,29 +66,6 @@ const TOOLS = [
       type: 'object',
       properties: {
         days_ahead: { type: 'number', description: 'How many days ahead to look, default 7' }
-      }
-    }
-  },
-  {
-    name: 'send_email',
-    description: 'Send an email via Gmail.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        to:      { type: 'string', description: 'Recipient email' },
-        subject: { type: 'string', description: 'Subject line' },
-        body:    { type: 'string', description: 'Email body' }
-      },
-      required: ['to', 'subject', 'body']
-    }
-  },
-  {
-    name: 'read_emails',
-    description: 'Read recent emails from Gmail inbox.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Number of emails, default 5' }
       }
     }
   },
@@ -109,6 +87,8 @@ const TOOLS = [
   }
 ];
 
+const TOOLS = [...N8N_TOOLS, ...gmailTools];
+
 async function loadHistory(chatId) {
   try {
     const { data, error } = await supabase
@@ -128,7 +108,7 @@ async function loadHistory(chatId) {
 async function saveMessages(chatId, userText, assistantReply) {
   try {
     const rows = [
-      { chat_id: String(chatId), role: 'user',      content: userText },
+      { chat_id: String(chatId), role: 'user', content: userText },
       { chat_id: String(chatId), role: 'assistant', content: assistantReply }
     ];
     const { error } = await supabase.from('assistant_messages').insert(rows);
@@ -163,6 +143,11 @@ async function sendTyping(chatId) {
 async function executeTool(toolName, toolInput) {
   console.log('Executing tool:', toolName, JSON.stringify(toolInput));
   try {
+    if (['read_emails', 'read_email_body', 'send_email'].includes(toolName)) {
+      const result = await handleGmailTool(toolName, toolInput);
+      console.log('Gmail tool result:', JSON.stringify(result));
+      return result;
+    }
     const res = await axios.post(N8N_TOOL_WEBHOOK, { tool: toolName, input: toolInput }, { timeout: 20000 });
     console.log('Tool result:', JSON.stringify(res.data));
     return res.data;
@@ -200,36 +185,28 @@ async function handleMessage(chatId, userText) {
   await sendTyping(chatId);
   const history = await loadHistory(chatId);
   console.log('History loaded:', history.length, 'messages');
-
   const messages = [...history, { role: 'user', content: userText }];
+
   let response = await callClaude(messages);
   let finalReply = '';
-
   let rounds = 0;
+
   while (response.stop_reason === 'tool_use' && rounds < 3) {
     rounds++;
     const toolUseBlock = response.content.find(b => b.type === 'tool_use');
     if (!toolUseBlock) break;
-
     await sendTyping(chatId);
     const toolResult = await executeTool(toolUseBlock.name, toolUseBlock.input);
-
     messages.push({ role: 'assistant', content: response.content });
     messages.push({
       role: 'user',
-      content: [{
-        type: 'tool_result',
-        tool_use_id: toolUseBlock.id,
-        content: JSON.stringify(toolResult)
-      }]
+      content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: JSON.stringify(toolResult) }]
     });
-
     response = await callClaude(messages);
   }
 
   const textBlock = response.content.find(b => b.type === 'text');
   finalReply = textBlock?.text || 'Done!';
-
   await sendTelegram(chatId, finalReply);
   await saveMessages(chatId, userText, finalReply);
 }
@@ -239,7 +216,7 @@ app.post('/webhook', async (req, res) => {
   try {
     const msg = req.body?.message;
     if (!msg?.text) return;
-    const chatId   = msg.chat.id;
+    const chatId = msg.chat.id;
     const userText = msg.text;
     console.log(`[${chatId}] ${userText}`);
     await handleMessage(chatId, userText);
@@ -255,5 +232,4 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running', tools: 'enabled' }));
-
 app.listen(PORT, () => console.log(`Rabih Assistant listening on port ${PORT}`));
