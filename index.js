@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 const { gmailTools, handleGmailTool } = require('./gmail-direct-fix');
+const { calendarTools, handleCalendarTool } = require('./calendar-direct-fix');
 
 const app = express();
 app.use(express.json());
@@ -45,38 +46,11 @@ CRITICAL RULES:
 
 const N8N_TOOLS = [
   {
-    name: 'create_calendar_event',
-    description: 'Create an event or reminder in Google Calendar.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        title: { type: 'string', description: 'Event title' },
-        date: { type: 'string', description: 'Date in YYYY-MM-DD format' },
-        time: { type: 'string', description: 'Time in HH:MM 24h format' },
-        duration_minutes: { type: 'number', description: 'Duration in minutes, default 60' },
-        is_reminder: { type: 'boolean', description: 'True if this is a reminder' }
-      },
-      required: ['title', 'date', 'time']
-    }
-  },
-  {
-    name: 'list_calendar_events',
-    description: 'List upcoming calendar events.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        days_ahead: { type: 'number', description: 'How many days ahead to look, default 7' }
-      }
-    }
-  },
-  {
     name: 'search_drive',
     description: 'Search for files in Google Drive.',
     input_schema: {
       type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Search term or filename' }
-      },
+      properties: { query: { type: 'string', description: 'Search term or filename' } },
       required: ['query']
     }
   },
@@ -87,7 +61,7 @@ const N8N_TOOLS = [
   }
 ];
 
-const TOOLS = [...N8N_TOOLS, ...gmailTools];
+const TOOLS = [...calendarTools, ...gmailTools, ...N8N_TOOLS];
 
 async function loadHistory(chatId) {
   try {
@@ -146,6 +120,11 @@ async function executeTool(toolName, toolInput) {
     if (['read_emails', 'read_email_body', 'send_email'].includes(toolName)) {
       const result = await handleGmailTool(toolName, toolInput);
       console.log('Gmail tool result:', JSON.stringify(result));
+      return result;
+    }
+    if (['list_calendar_events', 'create_calendar_event'].includes(toolName)) {
+      const result = await handleCalendarTool(toolName, toolInput);
+      console.log('Calendar tool result:', JSON.stringify(result));
       return result;
     }
     const res = await axios.post(N8N_TOOL_WEBHOOK, { tool: toolName, input: toolInput }, { timeout: 20000 });
