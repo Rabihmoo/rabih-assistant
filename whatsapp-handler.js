@@ -111,17 +111,42 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
 
     sock.ev.on('messages.upsert', async function(m) {
       try {
+        // Only handle real-time incoming messages, not history sync
+        if (m.type !== 'notify') return;
+
         const msg = m.messages[0];
         if (!msg) return;
+
+        // Skip messages with no content (server ack events - null message)
+        // IMPORTANT: must check this BEFORE touching processedMessages,
+        // otherwise the real message with content arrives later and gets
+        // wrongly skipped as a duplicate
+        if (!msg.message) return;
 
         const from = msg.key.remoteJid;
         const messageId = msg.key.id;
 
+        // Only process messages from Rabih's number or LID-based JIDs
         if (!from.includes('258855254847') && !from.includes('@lid')) {
           console.log('Ignoring message from:', from);
           return;
         }
 
+        // Extract text BEFORE adding to processedMessages
+        // This prevents the race condition where a null-content event
+        // consumes the messageId and blocks the real message
+        const text = (
+          (msg.message.conversation) ||
+          (msg.message.extendedTextMessage && msg.message.extendedTextMessage.text) ||
+          ''
+        );
+
+        if (!text || !text.trim()) {
+          console.log('Skipping non-text message type from:', from);
+          return;
+        }
+
+        // Now safe to mark as processed
         if (processedMessages.has(messageId)) {
           console.log('Skipping duplicate:', messageId);
           return;
@@ -129,20 +154,13 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         processedMessages.add(messageId);
         setTimeout(function() { processedMessages.delete(messageId); }, 60000);
 
+        // Skip bot's own sent messages (they also fire messages.upsert with fromMe:true)
         if (sentMessages.has(messageId)) {
           sentMessages.delete(messageId);
           return;
         }
 
-        const text = (
-          (msg.message && msg.message.conversation) ||
-          (msg.message && msg.message.extendedTextMessage && msg.message.extendedTextMessage.text) ||
-          ''
-        );
-
-        if (!text || !text.trim()) return;
-
-        console.log('WhatsApp message from ' + from + ': ' + text);
+        console.log('WhatsApp message from ' + from + ' (fromMe:' + msg.key.fromMe + '): ' + text);
 
         const response = await onMessage(text, 'whatsapp', RABIH_JID);
         console.log('WhatsApp reply ready:', response ? response.substring(0, 80) : 'empty');
