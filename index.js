@@ -16,6 +16,7 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const PORT = process.env.PORT || 3000;
+const RABIH_CHAT_ID = '5140288064';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -143,39 +144,31 @@ async function callClaude(messages) {
 
 async function handleMessage(chatId, userText, messageId) {
   const dedupKey = '__dedup__' + String(messageId);
-
   const { data: existing } = await supabase
     .from('assistant_messages')
     .select('id')
     .eq('chat_id', String(chatId))
     .eq('content', dedupKey)
     .limit(1);
-
   if (existing && existing.length > 0) {
     console.log('Duplicate message ignored:', messageId);
     return;
   }
-
   await supabase.from('assistant_messages').insert({
     chat_id: String(chatId),
     role: 'user',
     content: dedupKey
   });
-
   if (userText.toLowerCase().trim() === '/reset' || userText.toLowerCase().trim() === 'reset memory') {
     await supabase.from('assistant_messages').delete().eq('chat_id', String(chatId));
     await sendTelegram(chatId, 'Memory cleared. Fresh start!');
     return;
   }
-
   await sendTyping(chatId);
-
   const history = await loadHistory(chatId);
   history.push({ role: 'user', content: userText });
-
   let response = await callClaude(history);
   let rounds = 0;
-
   while (response.stop_reason === 'tool_use' && rounds < 5) {
     rounds++;
     const toolUseBlocks = response.content.filter(function(b) { return b.type === 'tool_use'; });
@@ -191,10 +184,8 @@ async function handleMessage(chatId, userText, messageId) {
     history.push({ role: 'user', content: toolResults });
     response = await callClaude(history);
   }
-
   const textBlock = response.content.find(function(b) { return b.type === 'text'; });
   const finalReply = textBlock ? textBlock.text : 'Done!';
-
   await saveMessage(chatId, 'user', userText);
   await saveMessage(chatId, 'assistant', finalReply);
   await sendTelegram(chatId, finalReply);
@@ -214,9 +205,7 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-
-// Morning briefing scheduler - runs every minute, fires at 7:00 AM Maputo time
-const RABIH_CHAT_ID = '5140288064';
+// Morning briefing - every day at 7:00 AM Maputo time
 setInterval(async function() {
   const now = new Date();
   const maputoHour = (now.getUTCHours() + 2) % 24;
@@ -249,32 +238,6 @@ setInterval(async function() {
     }
   }
 }, 60000);
-// WhatsApp integration
-initWhatsApp(TELEGRAM_TOKEN, RABIH_CHAT_ID, async function(text, source, from) {
-  const waHistory = await loadHistory('wa_' + from);
-  waHistory.push({ role: 'user', content: text });
-  let waResponse = await callClaude(waHistory);
-  let waRounds = 0;
-  while (waResponse.stop_reason === 'tool_use' && waRounds < 5) {
-    waRounds++;
-    const waToolBlocks = waResponse.content.filter(function(b) { return b.type === 'tool_use'; });
-    if (!waToolBlocks.length) break;
-    waHistory.push({ role: 'assistant', content: waResponse.content });
-    const waResults = [];
-    for (let i = 0; i < waToolBlocks.length; i++) {
-      const t = waToolBlocks[i];
-      const r = await executeTool(t.name, t.input);
-      waResults.push({ type: 'tool_result', tool_use_id: t.id, content: JSON.stringify(r) });
-    }
-    waHistory.push({ role: 'user', content: waResults });
-    waResponse = await callClaude(waHistory);
-  }
-  const waText = waResponse.content.find(function(b) { return b.type === 'text'; });
-  const waReply = waText ? waText.text : 'Done!';
-  await saveMessage('wa_' + from, 'user', text);
-  await saveMessage('wa_' + from, 'assistant', waReply);
-  return waReply;
-});
 
 app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running', tools: 'enabled' }));
 app.listen(PORT, function() { console.log('Rabih Assistant listening on port ' + PORT); });
