@@ -20,12 +20,69 @@ const RABIH_CHAT_ID = '5140288064';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-function buildSystemPrompt() {
+// Load persistent memory facts about Rabih
+async function loadMemory() {
+  try {
+    const { data } = await supabase
+      .from('rabih_memory')
+      .select('fact')
+      .order('created_at', { ascending: true });
+    return (data || []).map(function(r) { return r.fact; });
+  } catch (e) {
+    return [];
+  }
+}
+
+// Save a new memory fact
+async function saveMemory(fact) {
+  try {
+    await supabase.from('rabih_memory').insert({ fact: fact });
+  } catch (e) {
+    console.error('Memory save error:', e.message);
+  }
+}
+
+// Extract and save important facts from a conversation
+async function extractAndSaveMemory(userText, assistantReply) {
+  try {
+    const res = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 500,
+        messages: [{
+          role: 'user',
+          content: [
+            'Extract any important personal facts, preferences, names, decisions, or business info from this conversation.',
+            'Only extract facts worth remembering long-term. Return each fact on a new line starting with "FACT:".',
+            'If nothing important, return "NONE".',
+            '',
+            'User said: ' + userText,
+            'Assistant replied: ' + assistantReply
+          ].join('\n')
+        }]
+      },
+      { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+    );
+    const text = res.data.content[0].text;
+    if (text && text !== 'NONE') {
+      const lines = text.split('\n').filter(function(l) { return l.startsWith('FACT:'); });
+      for (let i = 0; i < lines.length; i++) {
+        const fact = lines[i].replace('FACT:', '').trim();
+        if (fact) await saveMemory(fact);
+      }
+    }
+  } catch (e) {
+    console.error('Memory extraction error:', e.message);
+  }
+}
+
+function buildSystemPrompt(memoryFacts) {
   const now = new Date();
   const today = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   const parts = [
-    'You are the personal AI assistant of Rabih Barakat. You work for him full-time.',
+    'You are the personal AI assistant of Rabih Barakat. You work for him full-time like a trusted friend and EA.',
     'Today is ' + today + ', current time is ' + time + ' (Maputo time, UTC+2).',
     '',
     'About Rabih:',
@@ -36,31 +93,41 @@ function buildSystemPrompt() {
     '- Direct person, gets things done, no unnecessary questions',
     '',
     'Your personality:',
-    '- Real personal assistant, like a top-tier human EA',
-    '- Concise, direct, warm',
+    '- You are like a smart trusted friend who knows Rabih deeply',
+    '- Concise, direct, warm - adapt your tone to how he talks',
     '- Reply in the same language Rabih uses',
     '- Never say you are an AI unless directly asked',
+    '- Remember everything, never ask him to repeat himself',
+    '- Anticipate what he needs based on context',
     '',
     'TOOL USAGE RULES:',
     '- ALWAYS use tools to complete requests - NEVER skip a tool call',
     '- NEVER confirm success unless the tool returned success:true or a valid result',
     '- If a tool fails, tell Rabih exactly what failed',
-    '- You have FULL authority over Gmail, Calendar, and Drive',
+    '- You have FULL authority over Gmail, Calendar, Drive, and all tools',
     '- You CAN delete calendar events - use delete_calendar_event tool',
-    '- You CAN read ANY file from Drive including .txt files - use read_file tool',
-    '- You CAN send emails with content from files',
+    '- You CAN read ANY file from Drive including .txt files',
     '- You CAN search the web for research - use web_search tool',
     '- NEVER say you cannot do something that your tools support',
-    '- When asked for a file, ALWAYS call read_file and paste the full contents directly in your reply',
-    '- NEVER tell Rabih to do things manually when you have a tool that can do it',
-    '- NEVER apologize or explain limitations - just use the tool and show the result',
-    '- For research tasks: search the web, summarize findings, then take action (email etc) without asking',
+    '- When asked for a file, ALWAYS call read_file and paste contents directly',
+    '- NEVER tell Rabih to do things manually when you have a tool',
+    '- NEVER apologize or explain limitations - just use the tool',
+    '- For research: search web, summarize, then act (email etc) without asking',
     '',
     'DATA RULES:',
-    '- NEVER invent or fabricate emails, events, files, or any data',
+    '- NEVER invent or fabricate any data',
     '- Only report what tools actually returned',
     '- If results are empty, say exactly that'
   ];
+
+  if (memoryFacts && memoryFacts.length > 0) {
+    parts.push('');
+    parts.push('WHAT YOU REMEMBER ABOUT RABIH (from past conversations):');
+    for (let i = 0; i < memoryFacts.length; i++) {
+      parts.push('- ' + memoryFacts[i]);
+    }
+  }
+
   return parts.join('\n');
 }
 
@@ -95,7 +162,7 @@ async function loadHistory(chatId) {
       .select('role, content, created_at')
       .eq('chat_id', String(chatId))
       .order('created_at', { ascending: false })
-      .limit(30);
+      .limit(50);
     if (error) { console.error('Load history error:', error.message); return []; }
     return (data || []).reverse()
       .filter(function(r) { return r.content && r.content.indexOf('__dedup__') !== 0; })
@@ -140,12 +207,12 @@ async function executeTool(toolName, toolInput) {
   }
 }
 
-async function callClaude(messages) {
+async function callClaude(messages, memoryFacts) {
   console.log('Calling Claude with', messages.length, 'messages...');
   const res = await axios.post(
     'https://api.anthropic.com/v1/messages',
-    { model: 'claude-sonnet-4-6', max_tokens: 4096, system: buildSystemPrompt(), tools: TOOLS, messages: messages },
-    { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'interleaved-thinking-2025-05-14', 'content-type': 'application/json' }, timeout: 60000 }
+    { model: 'claude-sonnet-4-6', max_tokens: 4096, system: buildSystemPrompt(memoryFacts || []), tools: TOOLS, messages: messages },
+    { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 60000 }
   );
   console.log('Claude stop_reason:', res.data.stop_reason);
   return res.data;
@@ -168,16 +235,42 @@ async function handleMessage(chatId, userText, messageId) {
     role: 'user',
     content: dedupKey
   });
-  if (userText.toLowerCase().trim() === '/reset' || userText.toLowerCase().trim() === 'reset memory') {
+
+  if (userText.toLowerCase().trim() === '/reset') {
     await supabase.from('assistant_messages').delete().eq('chat_id', String(chatId));
-    await sendTelegram(chatId, 'Memory cleared. Fresh start!');
+    await sendTelegram(chatId, 'Chat history cleared. Memory facts kept.');
     return;
   }
+
+  if (userText.toLowerCase().trim() === '/resetall') {
+    await supabase.from('assistant_messages').delete().eq('chat_id', String(chatId));
+    await supabase.from('rabih_memory').delete().neq('id', 0);
+    await sendTelegram(chatId, 'Everything cleared. Fresh start!');
+    return;
+  }
+
+  if (userText.toLowerCase().trim() === '/memory') {
+    const facts = await loadMemory();
+    if (facts.length === 0) {
+      await sendTelegram(chatId, 'No memories saved yet.');
+    } else {
+      await sendTelegram(chatId, 'What I remember about you:\n\n' + facts.map(function(f, i) { return (i+1) + '. ' + f; }).join('\n'));
+    }
+    return;
+  }
+
   await sendTyping(chatId);
-  const history = await loadHistory(chatId);
+
+  const [history, memoryFacts] = await Promise.all([
+    loadHistory(chatId),
+    loadMemory()
+  ]);
+
   history.push({ role: 'user', content: userText });
-  let response = await callClaude(history);
+
+  let response = await callClaude(history, memoryFacts);
   let rounds = 0;
+
   while (response.stop_reason === 'tool_use' && rounds < 5) {
     rounds++;
     const toolUseBlocks = response.content.filter(function(b) { return b.type === 'tool_use'; });
@@ -191,19 +284,25 @@ async function handleMessage(chatId, userText, messageId) {
       toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
     }
     history.push({ role: 'user', content: toolResults });
-    response = await callClaude(history);
+    response = await callClaude(history, memoryFacts);
   }
+
   const textBlock = response.content.find(function(b) { return b.type === 'text'; });
   const finalReply = textBlock ? textBlock.text : 'Done!';
+
   await saveMessage(chatId, 'user', userText);
   await saveMessage(chatId, 'assistant', finalReply);
   await sendTelegram(chatId, finalReply);
+
+  // Extract and save memory in background - don't await
+  extractAndSaveMemory(userText, finalReply).catch(function() {});
 }
 
-async function handleMediaMessage(chatId, messages, caption) {
+async function handleMediaMessage(chatId, messages) {
   try {
     await sendTyping(chatId);
-    const response = await callClaude(messages);
+    const memoryFacts = await loadMemory();
+    const response = await callClaude(messages, memoryFacts);
     const textBlock = response.content.find(function(b) { return b.type === 'text'; });
     await sendTelegram(chatId, textBlock ? textBlock.text : 'Could not process this file.');
   } catch (err) {
@@ -232,11 +331,11 @@ app.post('/webhook', async (req, res) => {
         { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
         { type: 'text', text: caption }
       ]}];
-      await handleMediaMessage(chatId, messages, caption);
+      await handleMediaMessage(chatId, messages);
       return;
     }
 
-    // Handle documents (PDF, etc)
+    // Handle documents
     if (msg.document) {
       const doc = msg.document;
       const caption = msg.caption || 'Read and summarize this document fully.';
@@ -249,7 +348,7 @@ app.post('/webhook', async (req, res) => {
         { type: 'document', source: { type: 'base64', media_type: mediaType, data: base64 } },
         { type: 'text', text: caption }
       ]}];
-      await handleMediaMessage(chatId, messages, caption);
+      await handleMediaMessage(chatId, messages);
       return;
     }
 
@@ -271,8 +370,9 @@ setInterval(async function() {
   if (maputoHour === 7 && maputoMin === 0) {
     console.log('Sending morning briefing...');
     try {
+      const memoryFacts = await loadMemory();
       const history = [{ role: 'user', content: 'Good morning! Give me my morning briefing: 1) My calendar events for today and tomorrow 2) Any unread important emails from the last 12 hours. Be concise and direct.' }];
-      let response = await callClaude(history);
+      let response = await callClaude(history, memoryFacts);
       let rounds = 0;
       while (response.stop_reason === 'tool_use' && rounds < 5) {
         rounds++;
@@ -286,11 +386,11 @@ setInterval(async function() {
           toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
         }
         history.push({ role: 'user', content: toolResults });
-        response = await callClaude(history);
+        response = await callClaude(history, memoryFacts);
       }
       const textBlock = response.content.find(function(b) { return b.type === 'text'; });
       const briefing = textBlock ? textBlock.text : 'Good morning Rabih!';
-      await sendTelegram(RABIH_CHAT_ID, 'Good morning Rabih! Here is your briefing:\n\n' + briefing);
+      await sendTelegram(RABIH_CHAT_ID, 'Good morning Rabih!\n\n' + briefing);
     } catch (err) {
       console.error('Morning briefing error:', err.message);
     }
