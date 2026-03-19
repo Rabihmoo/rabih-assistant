@@ -12,6 +12,7 @@ const sentMessages = new Set();
 async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
   const logger = pino({ level: 'silent' });
   const authFolder = path.join('/tmp', 'baileys_auth');
+  const RABIH_JID = '258855254847@s.whatsapp.net';
 
   async function connect() {
     qrSent = false;
@@ -58,7 +59,7 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         currentSock = sock;
         await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
           chat_id: rabihChatId,
-          text: 'WhatsApp connected! Message yourself on WhatsApp to test.'
+          text: 'WhatsApp connected! Send me a message on WhatsApp now.'
         }).catch(function() {});
       }
 
@@ -108,26 +109,25 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
 
         console.log('WhatsApp message from ' + from + ': ' + text);
 
-        const response = await onMessage(text, 'whatsapp', from);
-        console.log('WhatsApp reply ready:', response ? response.substring(0, 50) : 'empty');
+        const response = await onMessage(text, 'whatsapp', RABIH_JID);
+        console.log('WhatsApp reply ready:', response ? response.substring(0, 80) : 'empty');
 
         if (response && currentSock) {
-          const sent = await currentSock.sendMessage(from, { text: response });
+          // Always send reply to Rabih's real JID, not the LID
+          const sent = await currentSock.sendMessage(RABIH_JID, { text: response });
           if (sent && sent.key && sent.key.id) {
             sentMessages.add(sent.key.id);
             setTimeout(function() { sentMessages.delete(sent.key.id); }, 30000);
           }
-          console.log('WhatsApp reply sent OK');
-        } else {
-          console.log('No response or sock is null, skipping send');
+          console.log('WhatsApp reply sent to', RABIH_JID);
         }
       } catch (err) {
         console.error('WhatsApp message error:', err.message);
         try {
           if (currentSock) {
-            await currentSock.sendMessage(msg.key.remoteJid, { text: 'Error: ' + err.message });
+            await currentSock.sendMessage('258855254847@s.whatsapp.net', { text: 'Error: ' + err.message });
           }
-        } catch (e2) {}
+        } catch (e2) { console.error('Error reply failed:', e2.message); }
       }
     });
   }
