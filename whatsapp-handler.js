@@ -8,6 +8,7 @@ const path = require('path');
 let sock = null;
 let isConnected = false;
 let qrSent = false;
+const sentMessages = new Set();
 
 async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
   const logger = pino({ level: 'silent' });
@@ -31,7 +32,6 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
     sock.ev.on('connection.update', async function(update) {
       const { connection, lastDisconnect, qr } = update;
 
-      // Only send QR once per session
       if (qr && !qrSent) {
         qrSent = true;
         console.log('WhatsApp QR received, sending to Telegram...');
@@ -70,7 +70,7 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
           console.log('WhatsApp logged out - need to re-scan QR');
           await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
             chat_id: rabihChatId,
-            text: 'WhatsApp logged out. Restart the bot to re-scan QR code.'
+            text: 'WhatsApp logged out. Restart the bot to get a new QR.'
           }).catch(function() {});
         }
       }
@@ -82,36 +82,41 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
       if (m.type !== 'notify') return;
 
       const from = msg.key.remoteJid;
+      const messageId = msg.key.id;
 
       // Only respond to Rabih's own number
       if (!from.includes('258855254847')) {
-        console.log('Ignoring message from non-whitelisted number:', from);
+        console.log('Ignoring message from:', from);
         return;
       }
 
-      // Get message text - handle both regular and self messages
+      // Skip messages the bot itself sent (to avoid infinite loop)
+      if (sentMessages.has(messageId)) {
+        sentMessages.delete(messageId);
+        return;
+      }
+
+      // Get message text
       const text = msg.message && (
         (msg.message.conversation) ||
         (msg.message.extendedTextMessage && msg.message.extendedTextMessage.text) ||
+        (msg.message.imageMessage && msg.message.imageMessage.caption) ||
         ''
       );
 
-      if (!text) return;
+      if (!text || !text.trim()) return;
 
-      // Skip if it's a message WE sent (bot reply) to avoid infinite loop
-      if (msg.key.fromMe && text.length > 0) {
-        // Only skip bot's own replies, not user's self-messages
-        // We identify bot replies by checking if they came from the socket
-        console.log('Skipping outgoing message to avoid loop');
-        return;
-      }
-
-      console.log('WhatsApp message from ' + from + ': ' + text);
+      console.log('WhatsApp message: ' + text);
 
       try {
         const response = await onMessage(text, 'whatsapp', from);
         if (response && sock) {
-          await sock.sendMessage(from, { text: response });
+          const sent = await sock.sendMessage(from, { text: response });
+          if (sent && sent.key && sent.key.id) {
+            sentMessages.add(sent.key.id);
+            // Clean up after 30 seconds
+            setTimeout(function() { sentMessages.delete(sent.key.id); }, 30000);
+          }
         }
       } catch (err) {
         console.error('WhatsApp handler error:', err.message);
