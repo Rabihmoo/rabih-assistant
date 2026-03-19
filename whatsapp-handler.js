@@ -12,7 +12,12 @@ let isConnected = false;
 const sentMessages = new Set();
 const processedMessages = new Set();
 
-const QR_SENT_FILE = '/tmp/wa_qr_sent';
+// Use /data (Railway Volume) if available, fallback to /tmp
+const DATA_DIR = fs.existsSync('/data') ? '/data' : '/tmp';
+const QR_SENT_FILE = path.join(DATA_DIR, 'wa_qr_sent');
+const AUTH_FOLDER = path.join(DATA_DIR, 'baileys_auth');
+
+console.log('WhatsApp auth folder:', AUTH_FOLDER);
 
 function markQRSent() {
   try { fs.writeFileSync(QR_SENT_FILE, '1'); } catch(e) {}
@@ -29,17 +34,21 @@ function clearQRSent() {
   qrSent = false;
 }
 
+function forceNewQR() {
+  clearQRSent();
+  console.log('QR flag cleared - next QR event will be sent to Telegram');
+}
+
 function getWhatsAppSocket() {
   return currentSock;
 }
 
 async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
   const logger = pino({ level: 'silent' });
-  const authFolder = path.join('/tmp', 'baileys_auth');
   const RABIH_JID = '258855254847@s.whatsapp.net';
 
   async function connect() {
-    const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -69,7 +78,7 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
           const qrBuffer = await qrcode.toBuffer(qr, { type: 'png', width: 400 });
           const form = new FormData();
           form.append('chat_id', rabihChatId);
-          form.append('caption', 'Scan this QR with WhatsApp. Open WhatsApp > Linked Devices > Link a Device.');
+          form.append('caption', 'Scan this QR with WhatsApp. Open WhatsApp > Linked Devices > Link a Device.\n\nSend /wa_qr if you need a fresh QR code.');
           form.append('photo', qrBuffer, { filename: 'qr.png', contentType: 'image/png' });
           await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendPhoto', form, {
             headers: form.getHeaders()
@@ -85,10 +94,10 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         isConnected = true;
         currentSock = sock;
         clearQRSent();
-        console.log('WhatsApp connected!');
+        console.log('WhatsApp connected! Auth saved to:', AUTH_FOLDER);
         await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
           chat_id: rabihChatId,
-          text: 'WhatsApp connected! Send me a message on WhatsApp now.'
+          text: 'WhatsApp connected and session saved. You will not need to scan again unless you log out.'
         }).catch(function() {});
       }
 
@@ -100,10 +109,14 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         if (shouldReconnect) {
           setTimeout(connect, 5000);
         } else {
+          try {
+            fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
+            console.log('Auth folder cleared after logout');
+          } catch(e) {}
           clearQRSent();
           await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
             chat_id: rabihChatId,
-            text: 'WhatsApp logged out. Send /wa_connect to get a new QR code.'
+            text: 'WhatsApp logged out. Send /wa_qr to get a new QR code.'
           }).catch(function() {});
         }
       }
@@ -111,30 +124,19 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
 
     sock.ev.on('messages.upsert', async function(m) {
       try {
-        // Only handle real-time incoming messages, not history sync
         if (m.type !== 'notify') return;
-
         const msg = m.messages[0];
         if (!msg) return;
-
-        // Skip messages with no content (server ack events - null message)
-        // IMPORTANT: must check this BEFORE touching processedMessages,
-        // otherwise the real message with content arrives later and gets
-        // wrongly skipped as a duplicate
         if (!msg.message) return;
 
         const from = msg.key.remoteJid;
         const messageId = msg.key.id;
 
-        // Only process messages from Rabih's number or LID-based JIDs
         if (!from.includes('258855254847') && !from.includes('@lid')) {
           console.log('Ignoring message from:', from);
           return;
         }
 
-        // Extract text BEFORE adding to processedMessages
-        // This prevents the race condition where a null-content event
-        // consumes the messageId and blocks the real message
         const text = (
           (msg.message.conversation) ||
           (msg.message.extendedTextMessage && msg.message.extendedTextMessage.text) ||
@@ -142,11 +144,10 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         );
 
         if (!text || !text.trim()) {
-          console.log('Skipping non-text message type from:', from);
+          console.log('Skipping non-text message from:', from);
           return;
         }
 
-        // Now safe to mark as processed
         if (processedMessages.has(messageId)) {
           console.log('Skipping duplicate:', messageId);
           return;
@@ -154,7 +155,6 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         processedMessages.add(messageId);
         setTimeout(function() { processedMessages.delete(messageId); }, 60000);
 
-        // Skip bot's own sent messages (they also fire messages.upsert with fromMe:true)
         if (sentMessages.has(messageId)) {
           sentMessages.delete(messageId);
           return;
@@ -163,7 +163,7 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         console.log('WhatsApp message from ' + from + ' (fromMe:' + msg.key.fromMe + '): ' + text);
 
         const response = await onMessage(text, 'whatsapp', RABIH_JID);
-        console.log('WhatsApp reply ready:', response ? response.substring(0, 80) : 'empty');
+        console.log('WhatsApp reply ready:', response ? response.substring(0, 80) : 'null - suppressed');
 
         if (response && currentSock) {
           const sent = await currentSock.sendMessage(RABIH_JID, { text: response });
@@ -191,4 +191,4 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
   }
 }
 
-module.exports = { initWhatsApp: initWhatsApp, getWhatsAppSocket: getWhatsAppSocket };
+module.exports = { initWhatsApp: initWhatsApp, getWhatsAppSocket: getWhatsAppSocket, forceNewQR: forceNewQR };
