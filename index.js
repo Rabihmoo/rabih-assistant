@@ -7,7 +7,7 @@ const { driveTools, handleDriveTool } = require('./drive-direct-fix');
 const { filesTools, handleFilesTool } = require('./files-direct-fix');
 const { expenseTools, handleExpenseTool } = require('./expense-tracker');
 const { reminderTools, handleReminderTool } = require('./reminders');
-const { communicationTools, handleCommunicationTool } = require('./communication-tools');
+const { communicationTools, handleCommunicationTool, setSocket } = require('./communication-tools');
 const { initWhatsApp } = require('./whatsapp-handler');
 
 const app = express();
@@ -333,6 +333,12 @@ initWhatsApp(TELEGRAM_TOKEN, RABIH_CHAT_ID, async function(text, source, from) {
   await saveMessage('wa_' + from, 'assistant', waReply);
   return waReply;
 });
+
+// Update socket reference every 5 seconds
+setInterval(function() {
+  const sock = require('./whatsapp-handler').getWhatsAppSocket();
+  if (sock) setSocket(sock);
+}, 5000);
 
 app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running', tools: 'enabled' }));
 app.listen(PORT, function() { console.log('Rabih Assistant listening on port ' + PORT); });
