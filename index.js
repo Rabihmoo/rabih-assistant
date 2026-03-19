@@ -49,11 +49,12 @@ function buildSystemPrompt() {
     '- You CAN delete calendar events - use delete_calendar_event tool',
     '- You CAN read ANY file from Drive including .txt files - use read_file tool',
     '- You CAN send emails with content from files',
+    '- You CAN search the web for research - use web_search tool',
     '- NEVER say you cannot do something that your tools support',
     '- When asked for a file, ALWAYS call read_file and paste the full contents directly in your reply',
-    '- NEVER tell Rabih to go to Drive manually - you fetch it yourself and show him the content',
-    '- NEVER offer steps for Rabih to do himself when you have a tool that can do it',
+    '- NEVER tell Rabih to do things manually when you have a tool that can do it',
     '- NEVER apologize or explain limitations - just use the tool and show the result',
+    '- For research tasks: search the web, summarize findings, then take action (email etc) without asking',
     '',
     'DATA RULES:',
     '- NEVER invent or fabricate emails, events, files, or any data',
@@ -63,7 +64,15 @@ function buildSystemPrompt() {
   return parts.join('\n');
 }
 
-const TOOLS = [...calendarTools, ...gmailTools, ...driveTools, ...filesTools, ...expenseTools, ...reminderTools];
+const TOOLS = [
+  ...calendarTools,
+  ...gmailTools,
+  ...driveTools,
+  ...filesTools,
+  ...expenseTools,
+  ...reminderTools,
+  { type: 'web_search_20250305', name: 'web_search' }
+];
 
 async function saveMessage(chatId, role, content) {
   try {
@@ -135,8 +144,8 @@ async function callClaude(messages) {
   console.log('Calling Claude with', messages.length, 'messages...');
   const res = await axios.post(
     'https://api.anthropic.com/v1/messages',
-    { model: 'claude-sonnet-4-6', max_tokens: 1024, system: buildSystemPrompt(), tools: TOOLS, messages: messages },
-    { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 30000 }
+    { model: 'claude-sonnet-4-6', max_tokens: 4096, system: buildSystemPrompt(), tools: TOOLS, messages: messages },
+    { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'interleaved-thinking-2025-05-14', 'content-type': 'application/json' }, timeout: 60000 }
   );
   console.log('Claude stop_reason:', res.data.stop_reason);
   return res.data;
@@ -191,13 +200,62 @@ async function handleMessage(chatId, userText, messageId) {
   await sendTelegram(chatId, finalReply);
 }
 
+async function handleMediaMessage(chatId, messages, caption) {
+  try {
+    await sendTyping(chatId);
+    const response = await callClaude(messages);
+    const textBlock = response.content.find(function(b) { return b.type === 'text'; });
+    await sendTelegram(chatId, textBlock ? textBlock.text : 'Could not process this file.');
+  } catch (err) {
+    console.error('Media handler error:', err.message);
+    await sendTelegram(chatId, 'Error processing file: ' + err.message);
+  }
+}
+
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
   try {
     const msg = req.body && req.body.message;
-    if (!msg || !msg.text) return;
-    console.log('[' + msg.chat.id + '] ' + msg.text);
-    await handleMessage(msg.chat.id, msg.text, msg.message_id);
+    if (!msg) return;
+    const chatId = msg.chat.id;
+    const messageId = msg.message_id;
+
+    // Handle photos
+    if (msg.photo) {
+      const photo = msg.photo[msg.photo.length - 1];
+      const caption = msg.caption || 'What is in this image? Describe and analyze it fully.';
+      const fileRes = await axios.get('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/getFile?file_id=' + photo.file_id);
+      const filePath = fileRes.data.result.file_path;
+      const imageRes = await axios.get('https://api.telegram.org/file/bot' + TELEGRAM_TOKEN + '/' + filePath, { responseType: 'arraybuffer' });
+      const base64 = Buffer.from(imageRes.data).toString('base64');
+      const messages = [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+        { type: 'text', text: caption }
+      ]}];
+      await handleMediaMessage(chatId, messages, caption);
+      return;
+    }
+
+    // Handle documents (PDF, etc)
+    if (msg.document) {
+      const doc = msg.document;
+      const caption = msg.caption || 'Read and summarize this document fully.';
+      const fileRes = await axios.get('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/getFile?file_id=' + doc.file_id);
+      const filePath = fileRes.data.result.file_path;
+      const docRes = await axios.get('https://api.telegram.org/file/bot' + TELEGRAM_TOKEN + '/' + filePath, { responseType: 'arraybuffer' });
+      const base64 = Buffer.from(docRes.data).toString('base64');
+      const mediaType = doc.mime_type || 'application/pdf';
+      const messages = [{ role: 'user', content: [
+        { type: 'document', source: { type: 'base64', media_type: mediaType, data: base64 } },
+        { type: 'text', text: caption }
+      ]}];
+      await handleMediaMessage(chatId, messages, caption);
+      return;
+    }
+
+    if (!msg.text) return;
+    console.log('[' + chatId + '] ' + msg.text);
+    await handleMessage(chatId, msg.text, messageId);
   } catch (err) {
     const errMsg = (err.response && err.response.data && err.response.data.error && err.response.data.error.message) || err.message || 'Unknown error';
     console.error('Handler error:', errMsg);
