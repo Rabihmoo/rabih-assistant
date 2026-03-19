@@ -130,7 +130,7 @@ async function callClaude(messages) {
   console.log('Calling Claude with', messages.length, 'messages...');
   const res = await axios.post(
     'https://api.anthropic.com/v1/messages',
-    { model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system: buildSystemPrompt(), tools: TOOLS, messages: messages },
+    { model: 'claude-sonnet-4-6', max_tokens: 1024, system: buildSystemPrompt(), tools: TOOLS, messages: messages },
     { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 30000 }
   );
   console.log('Claude stop_reason:', res.data.stop_reason);
