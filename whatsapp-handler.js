@@ -4,11 +4,34 @@ const axios = require('axios');
 const FormData = require('form-data');
 const pino = require('pino');
 const path = require('path');
+const fs = require('fs');
 
 let currentSock = null;
 let qrSent = false;
+let isConnected = false;
 const sentMessages = new Set();
 const processedMessages = new Set();
+
+const QR_SENT_FILE = '/tmp/wa_qr_sent';
+
+function markQRSent() {
+  try { fs.writeFileSync(QR_SENT_FILE, '1'); } catch(e) {}
+  qrSent = true;
+}
+
+function wasQRSent() {
+  if (qrSent) return true;
+  try { return fs.existsSync(QR_SENT_FILE); } catch(e) { return false; }
+}
+
+function clearQRSent() {
+  try { fs.unlinkSync(QR_SENT_FILE); } catch(e) {}
+  qrSent = false;
+}
+
+function getWhatsAppSocket() {
+  return currentSock;
+}
 
 async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
   const logger = pino({ level: 'silent' });
@@ -16,7 +39,6 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
   const RABIH_JID = '258855254847@s.whatsapp.net';
 
   async function connect() {
-    qrSent = false;
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -27,8 +49,7 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
       printQRInTerminal: false,
       browser: ['Ubuntu', 'Chrome', '22.0.0'],
       connectTimeoutMs: 60000,
-      keepAliveIntervalMs: 10000,
-      retryRequestDelayMs: 500
+      keepAliveIntervalMs: 10000
     });
 
     currentSock = sock;
@@ -37,8 +58,12 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
     sock.ev.on('connection.update', async function(update) {
       const { connection, lastDisconnect, qr } = update;
 
-      if (qr && !qrSent) {
-        qrSent = true;
+      if (qr) {
+        if (wasQRSent()) {
+          console.log('QR already sent - skipping');
+          return;
+        }
+        markQRSent();
         console.log('WhatsApp QR received, sending to Telegram...');
         try {
           const qrBuffer = await qrcode.toBuffer(qr, { type: 'png', width: 400 });
@@ -51,13 +76,16 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
           });
           console.log('QR sent to Telegram OK');
         } catch (err) {
-          console.error('Failed to send QR to Telegram:', err.message);
+          console.error('Failed to send QR:', err.message);
+          clearQRSent();
         }
       }
 
       if (connection === 'open') {
-        console.log('WhatsApp connected!');
+        isConnected = true;
         currentSock = sock;
+        clearQRSent();
+        console.log('WhatsApp connected!');
         await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
           chat_id: rabihChatId,
           text: 'WhatsApp connected! Send me a message on WhatsApp now.'
@@ -65,15 +93,17 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
       }
 
       if (connection === 'close') {
+        isConnected = false;
         const statusCode = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output && lastDisconnect.error.output.statusCode;
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
         console.log('WhatsApp disconnected, code:', statusCode, 'reconnecting:', shouldReconnect);
         if (shouldReconnect) {
           setTimeout(connect, 5000);
         } else {
+          clearQRSent();
           await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
             chat_id: rabihChatId,
-            text: 'WhatsApp logged out. Restart the bot to get a new QR.'
+            text: 'WhatsApp logged out. Send /wa_connect to get a new QR code.'
           }).catch(function() {});
         }
       }
@@ -87,27 +117,23 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         const from = msg.key.remoteJid;
         const messageId = msg.key.id;
 
-        // Only respond to Rabih's number or @lid (self-chat)
         if (!from.includes('258855254847') && !from.includes('@lid')) {
           console.log('Ignoring message from:', from);
           return;
         }
 
-        // Dedup - skip if already processed this message ID
         if (processedMessages.has(messageId)) {
-          console.log('Skipping duplicate message:', messageId);
+          console.log('Skipping duplicate:', messageId);
           return;
         }
         processedMessages.add(messageId);
         setTimeout(function() { processedMessages.delete(messageId); }, 60000);
 
-        // Skip messages the bot itself sent
         if (sentMessages.has(messageId)) {
           sentMessages.delete(messageId);
           return;
         }
 
-        // Get message text
         const text = (
           (msg.message && msg.message.conversation) ||
           (msg.message && msg.message.extendedTextMessage && msg.message.extendedTextMessage.text) ||
@@ -127,15 +153,13 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
             sentMessages.add(sent.key.id);
             setTimeout(function() { sentMessages.delete(sent.key.id); }, 30000);
           }
-          console.log('WhatsApp reply sent to', RABIH_JID);
+          console.log('WhatsApp reply sent OK');
         }
       } catch (err) {
         console.error('WhatsApp message error:', err.message);
         try {
-          if (currentSock) {
-            await currentSock.sendMessage('258855254847@s.whatsapp.net', { text: 'Error: ' + err.message });
-          }
-        } catch (e2) { console.error('Error reply failed:', e2.message); }
+          if (currentSock) await currentSock.sendMessage('258855254847@s.whatsapp.net', { text: 'Error: ' + err.message });
+        } catch(e) {}
       }
     });
   }
@@ -145,12 +169,8 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
     console.log('WhatsApp initializing with Baileys...');
   } catch (err) {
     console.error('WhatsApp init error:', err.message);
-    setTimeout(function() { connect(); }, 10000);
+    setTimeout(connect, 10000);
   }
-}
-
-function getWhatsAppSocket() {
-  return currentSock;
 }
 
 module.exports = { initWhatsApp: initWhatsApp, getWhatsAppSocket: getWhatsAppSocket };
