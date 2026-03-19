@@ -118,7 +118,7 @@ async function executeTool(toolName, toolInput) {
     if (['read_emails', 'read_email_body', 'send_email'].includes(toolName)) return await handleGmailTool(toolName, toolInput);
     if (['list_calendar_events', 'create_calendar_event', 'delete_calendar_event'].includes(toolName)) return await handleCalendarTool(toolName, toolInput);
     if (['read_file', 'search_in_file', 'update_sheet_cell'].includes(toolName)) return await handleFilesTool(toolName, toolInput);
-    if (['search_drive', 'list_drive_files', 'delete_drive_file'].includes(toolName)) return await handleDriveTool(toolName, toolInput);
+    if (['search_drive', 'list_drive_files', 'delete_drive_file', 'rename_drive_file'].includes(toolName)) return await handleDriveTool(toolName, toolInput);
     return { error: 'Unknown tool' };
   } catch (e) {
     console.error('Tool error:', e.message);
@@ -210,5 +210,40 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+
+// Morning briefing scheduler - runs every minute, fires at 7:00 AM Maputo time
+const RABIH_CHAT_ID = '5140288064';
+setInterval(async function() {
+  const now = new Date();
+  const maputoHour = (now.getUTCHours() + 2) % 24;
+  const maputoMin = now.getUTCMinutes();
+  if (maputoHour === 7 && maputoMin === 0) {
+    console.log('Sending morning briefing...');
+    try {
+      const history = [{ role: 'user', content: 'Good morning! Give me my morning briefing: 1) My calendar events for today and tomorrow 2) Any unread important emails from the last 12 hours. Be concise and direct.' }];
+      let response = await callClaude(history);
+      let rounds = 0;
+      while (response.stop_reason === 'tool_use' && rounds < 5) {
+        rounds++;
+        const toolUseBlocks = response.content.filter(function(b) { return b.type === 'tool_use'; });
+        if (!toolUseBlocks.length) break;
+        history.push({ role: 'assistant', content: response.content });
+        const toolResults = [];
+        for (let i = 0; i < toolUseBlocks.length; i++) {
+          const toolUse = toolUseBlocks[i];
+          const result = await executeTool(toolUse.name, toolUse.input);
+          toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
+        }
+        history.push({ role: 'user', content: toolResults });
+        response = await callClaude(history);
+      }
+      const textBlock = response.content.find(function(b) { return b.type === 'text'; });
+      const briefing = textBlock ? textBlock.text : 'Good morning Rabih!';
+      await sendTelegram(RABIH_CHAT_ID, 'Good morning Rabih! Here is your briefing:\n\n' + briefing);
+    } catch (err) {
+      console.error('Morning briefing error:', err.message);
+    }
+  }
+}, 60000);
 app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running', tools: 'enabled' }));
 app.listen(PORT, function() { console.log('Rabih Assistant listening on port ' + PORT); });
