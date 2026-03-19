@@ -8,6 +8,7 @@ const path = require('path');
 let currentSock = null;
 let qrSent = false;
 const sentMessages = new Set();
+const processedMessages = new Set();
 
 async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
   const logger = pino({ level: 'silent' });
@@ -92,6 +93,14 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
           return;
         }
 
+        // Dedup - skip if already processed this message ID
+        if (processedMessages.has(messageId)) {
+          console.log('Skipping duplicate message:', messageId);
+          return;
+        }
+        processedMessages.add(messageId);
+        setTimeout(function() { processedMessages.delete(messageId); }, 60000);
+
         // Skip messages the bot itself sent
         if (sentMessages.has(messageId)) {
           sentMessages.delete(messageId);
@@ -113,7 +122,6 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         console.log('WhatsApp reply ready:', response ? response.substring(0, 80) : 'empty');
 
         if (response && currentSock) {
-          // Always send reply to Rabih's real JID, not the LID
           const sent = await currentSock.sendMessage(RABIH_JID, { text: response });
           if (sent && sent.key && sent.key.id) {
             sentMessages.add(sent.key.id);
