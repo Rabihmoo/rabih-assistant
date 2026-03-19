@@ -21,6 +21,9 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const PORT = process.env.PORT || 3000;
 const RABIH_CHAT_ID = '5140288064';
 
+// WhatsApp auto-reply toggle — true = ON, false = OFF
+let waEnabled = true;
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 async function loadMemory() {
@@ -195,6 +198,22 @@ async function handleMessage(chatId, userText, messageId) {
     return;
   }
 
+  // WhatsApp toggle commands
+  if (userText.toLowerCase().trim() === '/wa_on') {
+    waEnabled = true;
+    await sendTelegram(chatId, 'WhatsApp auto-reply is now ON. I will read and reply to your WhatsApp messages.');
+    return;
+  }
+  if (userText.toLowerCase().trim() === '/wa_off') {
+    waEnabled = false;
+    await sendTelegram(chatId, 'WhatsApp auto-reply is now OFF. I will ignore your WhatsApp messages until you send /wa_on.');
+    return;
+  }
+  if (userText.toLowerCase().trim() === '/wa_status') {
+    await sendTelegram(chatId, 'WhatsApp auto-reply is currently ' + (waEnabled ? 'ON' : 'OFF') + '.');
+    return;
+  }
+
   await sendTyping(chatId);
   const [history, memoryFacts] = await Promise.all([loadHistory(chatId), loadMemory()]);
   history.push({ role: 'user', content: userText });
@@ -288,7 +307,7 @@ setInterval(async function() {
       let response = await callClaude(history, memoryFacts);
       let rounds = 0;
       while (response.stop_reason === 'tool_use' && rounds < 5) {
-        rounds++;
+        rounds++; 
         const toolUseBlocks = response.content.filter(function(b) { return b.type === 'tool_use'; });
         if (!toolUseBlocks.length) break;
         history.push({ role: 'assistant', content: response.content });
@@ -309,6 +328,12 @@ setInterval(async function() {
 }, 60000);
 
 initWhatsApp(TELEGRAM_TOKEN, RABIH_CHAT_ID, async function(text, source, from) {
+  // If WhatsApp auto-reply is off, silently ignore the message
+  if (!waEnabled) {
+    console.log('WhatsApp auto-reply is OFF — ignoring message: ' + text.substring(0, 50));
+    return null;
+  }
+
   const waHistory = await loadHistory('wa_' + from);
   const waMemory = await loadMemory();
   waHistory.push({ role: 'user', content: text });
