@@ -7,7 +7,8 @@ const { driveTools, handleDriveTool } = require('./drive-direct-fix');
 const { filesTools, handleFilesTool } = require('./files-direct-fix');
 const { expenseTools, handleExpenseTool } = require('./expense-tracker');
 const { reminderTools, handleReminderTool } = require('./reminders');
-const { initWhatsApp } = require('./whatsapp-handler');
+const { communicationTools, handleCommunicationTool, setWhatsAppSocket } = require('./communication-tools');
+const { initWhatsApp, getWhatsAppSocket } = require('./whatsapp-handler');
 
 const app = express();
 app.use(express.json());
@@ -23,36 +24,28 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 async function loadMemory() {
   try {
-    const { data } = await supabase
-      .from('rabih_memory')
-      .select('fact')
-      .order('created_at', { ascending: true });
+    const { data } = await supabase.from('rabih_memory').select('fact').order('created_at', { ascending: true });
     return (data || []).map(function(r) { return r.fact; });
   } catch (e) { return []; }
 }
 
 async function saveMemory(fact) {
-  try {
-    await supabase.from('rabih_memory').insert({ fact: fact });
-  } catch (e) { console.error('Memory save error:', e.message); }
+  try { await supabase.from('rabih_memory').insert({ fact: fact }); }
+  catch (e) { console.error('Memory save error:', e.message); }
 }
 
 async function extractAndSaveMemory(userText, assistantReply) {
   try {
     const res = await axios.post(
       'https://api.anthropic.com/v1/messages',
-      {
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 500,
-        messages: [{ role: 'user', content: [
-          'Extract any important personal facts, preferences, names, decisions, or business info from this conversation.',
-          'Only extract facts worth remembering long-term. Return each fact on a new line starting with "FACT:".',
-          'If nothing important, return "NONE".',
-          '',
-          'User said: ' + userText,
-          'Assistant replied: ' + assistantReply
-        ].join('\n') }]
-      },
+      { model: 'claude-haiku-4-5-20251001', max_tokens: 500, messages: [{ role: 'user', content: [
+        'Extract any important personal facts, preferences, names, decisions, or business info from this conversation.',
+        'Only extract facts worth remembering long-term. Return each fact on a new line starting with FACT:',
+        'If nothing important, return NONE.',
+        '',
+        'User said: ' + userText,
+        'Assistant replied: ' + assistantReply
+      ].join('\n') }] },
       { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
     );
     const text = res.data.content[0].text;
@@ -93,7 +86,9 @@ function buildSystemPrompt(memoryFacts) {
     '- ALWAYS use tools to complete requests - NEVER skip a tool call',
     '- NEVER confirm success unless the tool returned success:true or a valid result',
     '- If a tool fails, tell Rabih exactly what failed',
-    '- You have FULL authority over Gmail, Calendar, Drive, and all tools',
+    '- You have FULL authority over Gmail, Calendar, Drive, WhatsApp, and all tools',
+    '- You CAN send WhatsApp messages to any number - use send_whatsapp_message tool',
+    '- You CAN make phone calls - use make_phone_call tool',
     '- You CAN delete calendar events - use delete_calendar_event tool',
     '- You CAN read ANY file from Drive including .txt files',
     '- You CAN search the web for research - use web_search tool',
@@ -101,7 +96,7 @@ function buildSystemPrompt(memoryFacts) {
     '- When asked for a file, ALWAYS call read_file and paste contents directly',
     '- NEVER tell Rabih to do things manually when you have a tool',
     '- NEVER apologize or explain limitations - just use the tool',
-    '- For research: search web, summarize, then act (email etc) without asking',
+    '- For research: search web, summarize, then act (email/WhatsApp etc) without asking',
     '',
     'DATA RULES:',
     '- NEVER invent or fabricate any data',
@@ -111,60 +106,39 @@ function buildSystemPrompt(memoryFacts) {
   if (memoryFacts && memoryFacts.length > 0) {
     parts.push('');
     parts.push('WHAT YOU REMEMBER ABOUT RABIH (from past conversations):');
-    for (let i = 0; i < memoryFacts.length; i++) {
-      parts.push('- ' + memoryFacts[i]);
-    }
+    for (let i = 0; i < memoryFacts.length; i++) { parts.push('- ' + memoryFacts[i]); }
   }
   return parts.join('\n');
 }
 
 const TOOLS = [
-  ...calendarTools,
-  ...gmailTools,
-  ...driveTools,
-  ...filesTools,
-  ...expenseTools,
-  ...reminderTools,
+  ...calendarTools, ...gmailTools, ...driveTools, ...filesTools,
+  ...expenseTools, ...reminderTools, ...communicationTools,
   { type: 'web_search_20250305', name: 'web_search' }
 ];
 
 async function saveMessage(chatId, role, content) {
   try {
     const contentToStore = typeof content === 'string' ? content : JSON.stringify(content);
-    const { error } = await supabase.from('assistant_messages').insert({
-      chat_id: String(chatId), role: role, content: contentToStore
-    });
+    const { error } = await supabase.from('assistant_messages').insert({ chat_id: String(chatId), role: role, content: contentToStore });
     if (error) console.error('Save error:', error.message);
   } catch (e) { console.error('Save exception:', e.message); }
 }
 
 async function loadHistory(chatId) {
   try {
-    const { data, error } = await supabase
-      .from('assistant_messages')
-      .select('role, content, created_at')
-      .eq('chat_id', String(chatId))
-      .order('created_at', { ascending: false })
-      .limit(50);
+    const { data, error } = await supabase.from('assistant_messages').select('role, content, created_at').eq('chat_id', String(chatId)).order('created_at', { ascending: false }).limit(50);
     if (error) { console.error('Load history error:', error.message); return []; }
     return (data || []).reverse()
       .filter(function(r) { return r.content && r.content.indexOf('__dedup__') !== 0; })
-      .map(function(r) {
-        return {
-          role: r.role,
-          content: (function() { try { return JSON.parse(r.content); } catch (e) { return r.content; } })()
-        };
-      });
+      .map(function(r) { return { role: r.role, content: (function() { try { return JSON.parse(r.content); } catch (e) { return r.content; } })() }; });
   } catch (e) { console.error('Load history exception:', e.message); return []; }
 }
 
 async function sendTelegram(chatId, text) {
   const url = 'https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendMessage';
-  try {
-    await axios.post(url, { chat_id: chatId, text: text, parse_mode: 'Markdown' });
-  } catch (e) {
-    try { await axios.post(url, { chat_id: chatId, text: text }); } catch (e2) { console.error('Telegram failed:', e2.message); }
-  }
+  try { await axios.post(url, { chat_id: chatId, text: text, parse_mode: 'Markdown' }); }
+  catch (e) { try { await axios.post(url, { chat_id: chatId, text: text }); } catch (e2) { console.error('Telegram failed:', e2.message); } }
 }
 
 async function sendTyping(chatId) {
@@ -180,6 +154,10 @@ async function executeTool(toolName, toolInput) {
     if (['search_drive', 'list_drive_files', 'delete_drive_file', 'rename_drive_file'].includes(toolName)) return await handleDriveTool(toolName, toolInput);
     if (['log_expense', 'get_expense_summary'].includes(toolName)) return await handleExpenseTool(toolName, toolInput);
     if (['set_reminder', 'add_supplier', 'find_supplier'].includes(toolName)) return await handleReminderTool(toolName, toolInput);
+    if (['send_whatsapp_message', 'make_phone_call'].includes(toolName)) {
+      setWhatsAppSocket(getWhatsAppSocket());
+      return await handleCommunicationTool(toolName, toolInput);
+    }
     return { error: 'Unknown tool' };
   } catch (e) { console.error('Tool error:', e.message); return { error: e.message }; }
 }
@@ -197,9 +175,7 @@ async function callClaude(messages, memoryFacts) {
 
 async function handleMessage(chatId, userText, messageId) {
   const dedupKey = '__dedup__' + String(messageId);
-  const { data: existing } = await supabase
-    .from('assistant_messages').select('id')
-    .eq('chat_id', String(chatId)).eq('content', dedupKey).limit(1);
+  const { data: existing } = await supabase.from('assistant_messages').select('id').eq('chat_id', String(chatId)).eq('content', dedupKey).limit(1);
   if (existing && existing.length > 0) { console.log('Duplicate ignored:', messageId); return; }
   await supabase.from('assistant_messages').insert({ chat_id: String(chatId), role: 'user', content: dedupKey });
 
@@ -269,7 +245,6 @@ app.post('/webhook', async (req, res) => {
     if (!msg) return;
     const chatId = msg.chat.id;
     const messageId = msg.message_id;
-
     if (msg.photo) {
       const photo = msg.photo[msg.photo.length - 1];
       const caption = msg.caption || 'What is in this image? Describe and analyze it fully.';
@@ -277,14 +252,10 @@ app.post('/webhook', async (req, res) => {
       const filePath = fileRes.data.result.file_path;
       const imageRes = await axios.get('https://api.telegram.org/file/bot' + TELEGRAM_TOKEN + '/' + filePath, { responseType: 'arraybuffer' });
       const base64 = Buffer.from(imageRes.data).toString('base64');
-      const messages = [{ role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-        { type: 'text', text: caption }
-      ]}];
+      const messages = [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } }, { type: 'text', text: caption }] }];
       await handleMediaMessage(chatId, messages);
       return;
     }
-
     if (msg.document) {
       const doc = msg.document;
       const caption = msg.caption || 'Read and summarize this document fully.';
@@ -293,14 +264,10 @@ app.post('/webhook', async (req, res) => {
       const docRes = await axios.get('https://api.telegram.org/file/bot' + TELEGRAM_TOKEN + '/' + filePath, { responseType: 'arraybuffer' });
       const base64 = Buffer.from(docRes.data).toString('base64');
       const mediaType = doc.mime_type || 'application/pdf';
-      const messages = [{ role: 'user', content: [
-        { type: 'document', source: { type: 'base64', media_type: mediaType, data: base64 } },
-        { type: 'text', text: caption }
-      ]}];
+      const messages = [{ role: 'user', content: [{ type: 'document', source: { type: 'base64', media_type: mediaType, data: base64 } }, { type: 'text', text: caption }] }];
       await handleMediaMessage(chatId, messages);
       return;
     }
-
     if (!msg.text) return;
     console.log('[' + chatId + '] ' + msg.text);
     await handleMessage(chatId, msg.text, messageId);
@@ -311,7 +278,6 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Morning briefing - every day at 7:00 AM Maputo time
 setInterval(async function() {
   const now = new Date();
   const maputoHour = (now.getUTCHours() + 2) % 24;
@@ -344,7 +310,6 @@ setInterval(async function() {
   }
 }, 60000);
 
-// WhatsApp via Baileys
 initWhatsApp(TELEGRAM_TOKEN, RABIH_CHAT_ID, async function(text, source, from) {
   const waHistory = await loadHistory('wa_' + from);
   const waMemory = await loadMemory();
