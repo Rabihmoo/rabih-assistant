@@ -85,7 +85,7 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
       const messageId = msg.key.id;
 
       // Only respond to Rabih's own number
-      if (!from.includes('258855254847')) {
+      if (!from.includes('258855254847') && !from.includes('@lid')) {
         console.log('Ignoring message from:', from);
         return;
       }
