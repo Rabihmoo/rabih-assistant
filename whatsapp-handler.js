@@ -149,4 +149,8 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
   }
 }
 
-module.exports = { initWhatsApp: initWhatsApp };
+function getWhatsAppSocket() {
+  return currentSock;
+}
+
+module.exports = { initWhatsApp: initWhatsApp, getWhatsAppSocket: getWhatsAppSocket };
