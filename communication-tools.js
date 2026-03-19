@@ -1,19 +1,21 @@
 const axios = require('axios');
 
-let whatsAppSocket = null;
+let _socket = null;
 
-function setWhatsAppSocket(sock) {
-  whatsAppSocket = sock;
+function setSocket(sock) {
+  _socket = sock;
 }
 
 async function sendWhatsAppMessage(phoneNumber, message) {
-  if (!whatsAppSocket) return { error: 'WhatsApp not connected' };
+  if (!_socket) return { error: 'WhatsApp not connected. Please scan the QR code first.' };
   try {
     const cleaned = phoneNumber.replace(/[^0-9]/g, '');
     const jid = cleaned + '@s.whatsapp.net';
-    await whatsAppSocket.sendMessage(jid, { text: message });
+    await _socket.sendMessage(jid, { text: message });
+    console.log('WhatsApp sent to', jid, ':', message);
     return { success: true, sent_to: phoneNumber, message: message };
   } catch (err) {
+    console.error('WhatsApp send error:', err.message);
     return { error: err.message };
   }
 }
@@ -22,32 +24,17 @@ async function makePhoneCall(phoneNumber, message, language) {
   const apiKey = process.env.AT_API_KEY;
   const username = process.env.AT_USERNAME;
   const callerId = process.env.AT_CALLER_ID;
-
   if (!apiKey || !username || !callerId) {
-    return { error: "Africa's Talking not configured. Add AT_API_KEY, AT_USERNAME, AT_CALLER_ID to Railway env vars. Sign up free at africastalking.com - works in Mozambique and Lebanon." };
+    return { error: "Africa's Talking not configured. Add AT_API_KEY, AT_USERNAME, AT_CALLER_ID to Railway env vars." };
   }
-
   try {
     const cleaned = phoneNumber.replace(/[^0-9+]/g, '');
     const toNumber = cleaned.startsWith('+') ? cleaned : '+' + cleaned;
-
     const response = await axios.post(
       'https://voice.africastalking.com/call',
-      new URLSearchParams({
-        username: username,
-        to: toNumber,
-        from: callerId,
-        clientRequestId: 'rabih_' + Date.now()
-      }).toString(),
-      {
-        headers: {
-          'apiKey': apiKey,
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Accept': 'application/json'
-        }
-      }
+      new URLSearchParams({ username: username, to: toNumber, from: callerId, clientRequestId: 'rabih_' + Date.now() }).toString(),
+      { headers: { 'apiKey': apiKey, 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' } }
     );
-
     return {
       success: true,
       call_id: response.data.entries && response.data.entries[0] && response.data.entries[0].sessionId,
@@ -76,7 +63,7 @@ const communicationTools = [
   },
   {
     name: 'make_phone_call',
-    description: "Make a real phone call via Africa's Talking. Works in Mozambique and Lebanon. Use when Rabih says call someone, phone someone, or ring someone.",
+    description: "Make a real phone call via Africa's Talking. Works in Mozambique and Lebanon.",
     input_schema: {
       type: 'object',
       properties: {
@@ -101,4 +88,4 @@ async function handleCommunicationTool(toolName, toolInput) {
   }
 }
 
-module.exports = { communicationTools: communicationTools, handleCommunicationTool: handleCommunicationTool, setWhatsAppSocket: setWhatsAppSocket };
+module.exports = { communicationTools: communicationTools, handleCommunicationTool: handleCommunicationTool, setSocket: setSocket };
