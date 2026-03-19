@@ -6,13 +6,9 @@ function setWhatsAppSocket(sock) {
   whatsAppSocket = sock;
 }
 
-// Send WhatsApp message to any number
 async function sendWhatsAppMessage(phoneNumber, message) {
-  if (!whatsAppSocket) {
-    return { error: 'WhatsApp not connected' };
-  }
+  if (!whatsAppSocket) return { error: 'WhatsApp not connected' };
   try {
-    // Clean phone number - remove +, spaces, dashes
     const cleaned = phoneNumber.replace(/[^0-9]/g, '');
     const jid = cleaned + '@s.whatsapp.net';
     await whatsAppSocket.sendMessage(jid, { text: message });
@@ -22,47 +18,41 @@ async function sendWhatsAppMessage(phoneNumber, message) {
   }
 }
 
-// Make a phone call via Twilio
 async function makePhoneCall(phoneNumber, message, language) {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const fromNumber = process.env.TWILIO_PHONE_NUMBER;
+  const apiKey = process.env.AT_API_KEY;
+  const username = process.env.AT_USERNAME;
+  const callerId = process.env.AT_CALLER_ID;
 
-  if (!accountSid || !authToken || !fromNumber) {
-    return { error: 'Twilio not configured. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER to Railway env vars.' };
+  if (!apiKey || !username || !callerId) {
+    return { error: "Africa's Talking not configured. Add AT_API_KEY, AT_USERNAME, AT_CALLER_ID to Railway env vars. Sign up free at africastalking.com - works in Mozambique and Lebanon." };
   }
 
   try {
     const cleaned = phoneNumber.replace(/[^0-9+]/g, '');
     const toNumber = cleaned.startsWith('+') ? cleaned : '+' + cleaned;
 
-    // Choose voice based on language
-    const voice = (language && language.toLowerCase().includes('ar')) ? 'Polly.Zeina' : 'Polly.Joanna';
-    const lang = (language && language.toLowerCase().includes('ar')) ? 'ar-SA' : 'en-US';
-
-    // Build TwiML
-    const twiml = '<Response><Say voice="' + voice + '" language="' + lang + '">' + message + '</Say></Response>';
-    const twimlEncoded = encodeURIComponent(twiml);
-    const twimlUrl = 'http://twimlets.com/echo?Twiml=' + twimlEncoded;
-
     const response = await axios.post(
-      'https://api.twilio.com/2010-04-01/Accounts/' + accountSid + '/Calls.json',
+      'https://voice.africastalking.com/call',
       new URLSearchParams({
-        To: toNumber,
-        From: fromNumber,
-        Url: twimlUrl
+        username: username,
+        to: toNumber,
+        from: callerId,
+        clientRequestId: 'rabih_' + Date.now()
       }).toString(),
       {
-        auth: { username: accountSid, password: authToken },
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        headers: {
+          'apiKey': apiKey,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json'
+        }
       }
     );
 
     return {
       success: true,
-      call_sid: response.data.sid,
+      call_id: response.data.entries && response.data.entries[0] && response.data.entries[0].sessionId,
       to: toNumber,
-      status: response.data.status,
+      status: response.data.entries && response.data.entries[0] && response.data.entries[0].status,
       message: message
     };
   } catch (err) {
@@ -74,7 +64,7 @@ async function makePhoneCall(phoneNumber, message, language) {
 const communicationTools = [
   {
     name: 'send_whatsapp_message',
-    description: 'Send a WhatsApp message to any phone number. Use when Rabih says send WhatsApp to someone, message someone on WhatsApp, or notify someone via WhatsApp.',
+    description: "Send a WhatsApp message to any phone number. Use when Rabih says send WhatsApp to someone, message someone on WhatsApp, or notify someone. Can send in Arabic or English.",
     input_schema: {
       type: 'object',
       properties: {
@@ -86,7 +76,7 @@ const communicationTools = [
   },
   {
     name: 'make_phone_call',
-    description: 'Make a real phone call to any number and speak a message. The bot calls the number and reads the message aloud in Arabic or English. Use when Rabih says call someone, phone someone, or ring someone.',
+    description: "Make a real phone call via Africa's Talking. Works in Mozambique and Lebanon. Use when Rabih says call someone, phone someone, or ring someone.",
     input_schema: {
       type: 'object',
       properties: {
@@ -111,4 +101,4 @@ async function handleCommunicationTool(toolName, toolInput) {
   }
 }
 
-module.exports = { communicationTools, handleCommunicationTool, setWhatsAppSocket };
+module.exports = { communicationTools: communicationTools, handleCommunicationTool: handleCommunicationTool, setWhatsAppSocket: setWhatsAppSocket };
