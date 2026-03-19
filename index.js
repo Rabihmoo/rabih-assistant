@@ -7,8 +7,8 @@ const { driveTools, handleDriveTool } = require('./drive-direct-fix');
 const { filesTools, handleFilesTool } = require('./files-direct-fix');
 const { expenseTools, handleExpenseTool } = require('./expense-tracker');
 const { reminderTools, handleReminderTool } = require('./reminders');
-const { communicationTools, handleCommunicationTool, setWhatsAppSocket } = require('./communication-tools');
-const { initWhatsApp, getWhatsAppSocket } = require('./whatsapp-handler');
+const { communicationTools, handleCommunicationTool } = require('./communication-tools');
+const { initWhatsApp } = require('./whatsapp-handler');
 
 const app = express();
 app.use(express.json());
@@ -154,10 +154,7 @@ async function executeTool(toolName, toolInput) {
     if (['search_drive', 'list_drive_files', 'delete_drive_file', 'rename_drive_file'].includes(toolName)) return await handleDriveTool(toolName, toolInput);
     if (['log_expense', 'get_expense_summary'].includes(toolName)) return await handleExpenseTool(toolName, toolInput);
     if (['set_reminder', 'add_supplier', 'find_supplier'].includes(toolName)) return await handleReminderTool(toolName, toolInput);
-    if (['send_whatsapp_message', 'make_phone_call'].includes(toolName)) {
-      setWhatsAppSocket(getWhatsAppSocket());
-      return await handleCommunicationTool(toolName, toolInput);
-    }
+    if (['send_whatsapp_message', 'make_phone_call'].includes(toolName)) return await handleCommunicationTool(toolName, toolInput);
     return { error: 'Unknown tool' };
   } catch (e) { console.error('Tool error:', e.message); return { error: e.message }; }
 }
