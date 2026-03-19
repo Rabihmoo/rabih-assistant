@@ -5,6 +5,7 @@ const { gmailTools, handleGmailTool } = require('./gmail-direct-fix');
 const { calendarTools, handleCalendarTool } = require('./calendar-direct-fix');
 const { driveTools, handleDriveTool } = require('./drive-direct-fix');
 const { filesTools, handleFilesTool } = require('./files-direct-fix');
+const { expenseTools, handleExpenseTool } = require('./expense-tracker');
 
 const app = express();
 app.use(express.json());
@@ -60,7 +61,7 @@ function buildSystemPrompt() {
   return parts.join('\n');
 }
 
-const TOOLS = [...calendarTools, ...gmailTools, ...driveTools, ...filesTools];
+const TOOLS = [...calendarTools, ...gmailTools, ...driveTools, ...filesTools, ...expenseTools];
 
 async function saveMessage(chatId, role, content) {
   try {
@@ -119,6 +120,7 @@ async function executeTool(toolName, toolInput) {
     if (['list_calendar_events', 'create_calendar_event', 'delete_calendar_event'].includes(toolName)) return await handleCalendarTool(toolName, toolInput);
     if (['read_file', 'search_in_file', 'update_sheet_cell'].includes(toolName)) return await handleFilesTool(toolName, toolInput);
     if (['search_drive', 'list_drive_files', 'delete_drive_file', 'rename_drive_file'].includes(toolName)) return await handleDriveTool(toolName, toolInput);
+    if (['log_expense', 'get_expense_summary'].includes(toolName)) return await handleExpenseTool(toolName, toolInput);
     return { error: 'Unknown tool' };
   } catch (e) {
     console.error('Tool error:', e.message);
