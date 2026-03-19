@@ -1,4 +1,4 @@
-// v2
+// v3
 const axios = require('axios');
 
 let _socket = null;
@@ -12,12 +12,28 @@ async function sendWhatsAppMessage(phoneNumber, message) {
   try {
     const cleaned = phoneNumber.replace(/[^0-9]/g, '');
     const jid = cleaned + '@s.whatsapp.net';
+
+    // Verify the number is registered on WhatsApp before sending.
+    // Without this, Baileys throws a raw 400 from WhatsApp servers for unknown numbers.
+    let checkResults;
+    try {
+      checkResults = await _socket.onWhatsApp(jid);
+    } catch (checkErr) {
+      console.error('onWhatsApp check failed:', checkErr.message);
+      // If the check itself fails (network issue), try sending anyway
+      checkResults = null;
+    }
+
+    if (checkResults && checkResults.length > 0 && !checkResults[0].exists) {
+      return { error: 'Number ' + phoneNumber + ' is not registered on WhatsApp.' };
+    }
+
     await _socket.sendMessage(jid, { text: message });
     console.log('WhatsApp sent to', jid, ':', message);
     return { success: true, sent_to: phoneNumber, message: message };
   } catch (err) {
     console.error('WhatsApp send error:', err.message);
-    return { error: err.message };
+    return { error: 'Failed to send WhatsApp to ' + phoneNumber + ': ' + (err.message || 'Unknown error') };
   }
 }
 
