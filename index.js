@@ -7,6 +7,7 @@ const { driveTools, handleDriveTool } = require('./drive-direct-fix');
 const { filesTools, handleFilesTool } = require('./files-direct-fix');
 const { expenseTools, handleExpenseTool } = require('./expense-tracker');
 const { reminderTools, handleReminderTool } = require('./reminders');
+const { initWhatsApp } = require('./whatsapp-handler');
 
 const app = express();
 app.use(express.json());
@@ -249,5 +250,32 @@ setInterval(async function() {
     }
   }
 }, 60000);
+// WhatsApp integration
+initWhatsApp(TELEGRAM_TOKEN, RABIH_CHAT_ID, async function(text, source, from) {
+  const waHistory = await loadHistory('wa_' + from);
+  waHistory.push({ role: 'user', content: text });
+  let waResponse = await callClaude(waHistory);
+  let waRounds = 0;
+  while (waResponse.stop_reason === 'tool_use' && waRounds < 5) {
+    waRounds++;
+    const waToolBlocks = waResponse.content.filter(function(b) { return b.type === 'tool_use'; });
+    if (!waToolBlocks.length) break;
+    waHistory.push({ role: 'assistant', content: waResponse.content });
+    const waResults = [];
+    for (let i = 0; i < waToolBlocks.length; i++) {
+      const t = waToolBlocks[i];
+      const r = await executeTool(t.name, t.input);
+      waResults.push({ type: 'tool_result', tool_use_id: t.id, content: JSON.stringify(r) });
+    }
+    waHistory.push({ role: 'user', content: waResults });
+    waResponse = await callClaude(waHistory);
+  }
+  const waText = waResponse.content.find(function(b) { return b.type === 'text'; });
+  const waReply = waText ? waText.text : 'Done!';
+  await saveMessage('wa_' + from, 'user', text);
+  await saveMessage('wa_' + from, 'assistant', waReply);
+  return waReply;
+});
+
 app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running', tools: 'enabled' }));
 app.listen(PORT, function() { console.log('Rabih Assistant listening on port ' + PORT); });
