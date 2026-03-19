@@ -7,6 +7,7 @@ const { driveTools, handleDriveTool } = require('./drive-direct-fix');
 const { filesTools, handleFilesTool } = require('./files-direct-fix');
 const { expenseTools, handleExpenseTool } = require('./expense-tracker');
 const { reminderTools, handleReminderTool } = require('./reminders');
+const { initWhatsApp } = require('./whatsapp-handler');
 
 const app = express();
 app.use(express.json());
@@ -20,7 +21,6 @@ const RABIH_CHAT_ID = '5140288064';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Load persistent memory facts about Rabih
 async function loadMemory() {
   try {
     const { data } = await supabase
@@ -28,21 +28,15 @@ async function loadMemory() {
       .select('fact')
       .order('created_at', { ascending: true });
     return (data || []).map(function(r) { return r.fact; });
-  } catch (e) {
-    return [];
-  }
+  } catch (e) { return []; }
 }
 
-// Save a new memory fact
 async function saveMemory(fact) {
   try {
     await supabase.from('rabih_memory').insert({ fact: fact });
-  } catch (e) {
-    console.error('Memory save error:', e.message);
-  }
+  } catch (e) { console.error('Memory save error:', e.message); }
 }
 
-// Extract and save important facts from a conversation
 async function extractAndSaveMemory(userText, assistantReply) {
   try {
     const res = await axios.post(
@@ -50,17 +44,14 @@ async function extractAndSaveMemory(userText, assistantReply) {
       {
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 500,
-        messages: [{
-          role: 'user',
-          content: [
-            'Extract any important personal facts, preferences, names, decisions, or business info from this conversation.',
-            'Only extract facts worth remembering long-term. Return each fact on a new line starting with "FACT:".',
-            'If nothing important, return "NONE".',
-            '',
-            'User said: ' + userText,
-            'Assistant replied: ' + assistantReply
-          ].join('\n')
-        }]
+        messages: [{ role: 'user', content: [
+          'Extract any important personal facts, preferences, names, decisions, or business info from this conversation.',
+          'Only extract facts worth remembering long-term. Return each fact on a new line starting with "FACT:".',
+          'If nothing important, return "NONE".',
+          '',
+          'User said: ' + userText,
+          'Assistant replied: ' + assistantReply
+        ].join('\n') }]
       },
       { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
     );
@@ -72,9 +63,7 @@ async function extractAndSaveMemory(userText, assistantReply) {
         if (fact) await saveMemory(fact);
       }
     }
-  } catch (e) {
-    console.error('Memory extraction error:', e.message);
-  }
+  } catch (e) { console.error('Memory extraction error:', e.message); }
 }
 
 function buildSystemPrompt(memoryFacts) {
@@ -119,7 +108,6 @@ function buildSystemPrompt(memoryFacts) {
     '- Only report what tools actually returned',
     '- If results are empty, say exactly that'
   ];
-
   if (memoryFacts && memoryFacts.length > 0) {
     parts.push('');
     parts.push('WHAT YOU REMEMBER ABOUT RABIH (from past conversations):');
@@ -127,7 +115,6 @@ function buildSystemPrompt(memoryFacts) {
       parts.push('- ' + memoryFacts[i]);
     }
   }
-
   return parts.join('\n');
 }
 
@@ -145,14 +132,10 @@ async function saveMessage(chatId, role, content) {
   try {
     const contentToStore = typeof content === 'string' ? content : JSON.stringify(content);
     const { error } = await supabase.from('assistant_messages').insert({
-      chat_id: String(chatId),
-      role: role,
-      content: contentToStore
+      chat_id: String(chatId), role: role, content: contentToStore
     });
     if (error) console.error('Save error:', error.message);
-  } catch (e) {
-    console.error('Save exception:', e.message);
-  }
+  } catch (e) { console.error('Save exception:', e.message); }
 }
 
 async function loadHistory(chatId) {
@@ -172,10 +155,7 @@ async function loadHistory(chatId) {
           content: (function() { try { return JSON.parse(r.content); } catch (e) { return r.content; } })()
         };
       });
-  } catch (e) {
-    console.error('Load history exception:', e.message);
-    return [];
-  }
+  } catch (e) { console.error('Load history exception:', e.message); return []; }
 }
 
 async function sendTelegram(chatId, text) {
@@ -201,10 +181,7 @@ async function executeTool(toolName, toolInput) {
     if (['log_expense', 'get_expense_summary'].includes(toolName)) return await handleExpenseTool(toolName, toolInput);
     if (['set_reminder', 'add_supplier', 'find_supplier'].includes(toolName)) return await handleReminderTool(toolName, toolInput);
     return { error: 'Unknown tool' };
-  } catch (e) {
-    console.error('Tool error:', e.message);
-    return { error: e.message };
-  }
+  } catch (e) { console.error('Tool error:', e.message); return { error: e.message }; }
 }
 
 async function callClaude(messages, memoryFacts) {
@@ -221,56 +198,34 @@ async function callClaude(messages, memoryFacts) {
 async function handleMessage(chatId, userText, messageId) {
   const dedupKey = '__dedup__' + String(messageId);
   const { data: existing } = await supabase
-    .from('assistant_messages')
-    .select('id')
-    .eq('chat_id', String(chatId))
-    .eq('content', dedupKey)
-    .limit(1);
-  if (existing && existing.length > 0) {
-    console.log('Duplicate message ignored:', messageId);
-    return;
-  }
-  await supabase.from('assistant_messages').insert({
-    chat_id: String(chatId),
-    role: 'user',
-    content: dedupKey
-  });
+    .from('assistant_messages').select('id')
+    .eq('chat_id', String(chatId)).eq('content', dedupKey).limit(1);
+  if (existing && existing.length > 0) { console.log('Duplicate ignored:', messageId); return; }
+  await supabase.from('assistant_messages').insert({ chat_id: String(chatId), role: 'user', content: dedupKey });
 
   if (userText.toLowerCase().trim() === '/reset') {
     await supabase.from('assistant_messages').delete().eq('chat_id', String(chatId));
     await sendTelegram(chatId, 'Chat history cleared. Memory facts kept.');
     return;
   }
-
   if (userText.toLowerCase().trim() === '/resetall') {
     await supabase.from('assistant_messages').delete().eq('chat_id', String(chatId));
     await supabase.from('rabih_memory').delete().neq('id', 0);
     await sendTelegram(chatId, 'Everything cleared. Fresh start!');
     return;
   }
-
   if (userText.toLowerCase().trim() === '/memory') {
     const facts = await loadMemory();
-    if (facts.length === 0) {
-      await sendTelegram(chatId, 'No memories saved yet.');
-    } else {
-      await sendTelegram(chatId, 'What I remember about you:\n\n' + facts.map(function(f, i) { return (i+1) + '. ' + f; }).join('\n'));
-    }
+    if (facts.length === 0) { await sendTelegram(chatId, 'No memories saved yet.'); }
+    else { await sendTelegram(chatId, 'What I remember about you:\n\n' + facts.map(function(f, i) { return (i+1) + '. ' + f; }).join('\n')); }
     return;
   }
 
   await sendTyping(chatId);
-
-  const [history, memoryFacts] = await Promise.all([
-    loadHistory(chatId),
-    loadMemory()
-  ]);
-
+  const [history, memoryFacts] = await Promise.all([loadHistory(chatId), loadMemory()]);
   history.push({ role: 'user', content: userText });
-
   let response = await callClaude(history, memoryFacts);
   let rounds = 0;
-
   while (response.stop_reason === 'tool_use' && rounds < 5) {
     rounds++;
     const toolUseBlocks = response.content.filter(function(b) { return b.type === 'tool_use'; });
@@ -286,15 +241,11 @@ async function handleMessage(chatId, userText, messageId) {
     history.push({ role: 'user', content: toolResults });
     response = await callClaude(history, memoryFacts);
   }
-
   const textBlock = response.content.find(function(b) { return b.type === 'text'; });
   const finalReply = textBlock ? textBlock.text : 'Done!';
-
   await saveMessage(chatId, 'user', userText);
   await saveMessage(chatId, 'assistant', finalReply);
   await sendTelegram(chatId, finalReply);
-
-  // Extract and save memory in background - don't await
   extractAndSaveMemory(userText, finalReply).catch(function() {});
 }
 
@@ -319,7 +270,6 @@ app.post('/webhook', async (req, res) => {
     const chatId = msg.chat.id;
     const messageId = msg.message_id;
 
-    // Handle photos
     if (msg.photo) {
       const photo = msg.photo[msg.photo.length - 1];
       const caption = msg.caption || 'What is in this image? Describe and analyze it fully.';
@@ -335,7 +285,6 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Handle documents
     if (msg.document) {
       const doc = msg.document;
       const caption = msg.caption || 'Read and summarize this document fully.';
@@ -391,11 +340,37 @@ setInterval(async function() {
       const textBlock = response.content.find(function(b) { return b.type === 'text'; });
       const briefing = textBlock ? textBlock.text : 'Good morning Rabih!';
       await sendTelegram(RABIH_CHAT_ID, 'Good morning Rabih!\n\n' + briefing);
-    } catch (err) {
-      console.error('Morning briefing error:', err.message);
-    }
+    } catch (err) { console.error('Morning briefing error:', err.message); }
   }
 }, 60000);
+
+// WhatsApp via Baileys
+initWhatsApp(TELEGRAM_TOKEN, RABIH_CHAT_ID, async function(text, source, from) {
+  const waHistory = await loadHistory('wa_' + from);
+  const waMemory = await loadMemory();
+  waHistory.push({ role: 'user', content: text });
+  let waResponse = await callClaude(waHistory, waMemory);
+  let waRounds = 0;
+  while (waResponse.stop_reason === 'tool_use' && waRounds < 5) {
+    waRounds++;
+    const waToolBlocks = waResponse.content.filter(function(b) { return b.type === 'tool_use'; });
+    if (!waToolBlocks.length) break;
+    waHistory.push({ role: 'assistant', content: waResponse.content });
+    const waResults = [];
+    for (let i = 0; i < waToolBlocks.length; i++) {
+      const t = waToolBlocks[i];
+      const r = await executeTool(t.name, t.input);
+      waResults.push({ type: 'tool_result', tool_use_id: t.id, content: JSON.stringify(r) });
+    }
+    waHistory.push({ role: 'user', content: waResults });
+    waResponse = await callClaude(waHistory, waMemory);
+  }
+  const waText = waResponse.content.find(function(b) { return b.type === 'text'; });
+  const waReply = waText ? waText.text : 'Done!';
+  await saveMessage('wa_' + from, 'user', text);
+  await saveMessage('wa_' + from, 'assistant', waReply);
+  return waReply;
+});
 
 app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running', tools: 'enabled' }));
 app.listen(PORT, function() { console.log('Rabih Assistant listening on port ' + PORT); });
