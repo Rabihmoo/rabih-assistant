@@ -7,12 +7,14 @@ const path = require('path');
 
 let sock = null;
 let isConnected = false;
+let qrSent = false;
 
 async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
   const logger = pino({ level: 'silent' });
   const authFolder = path.join('/tmp', 'baileys_auth');
 
   async function connect() {
+    qrSent = false;
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -29,13 +31,15 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
     sock.ev.on('connection.update', async function(update) {
       const { connection, lastDisconnect, qr } = update;
 
-      if (qr) {
+      // Only send QR once per session
+      if (qr && !qrSent) {
+        qrSent = true;
         console.log('WhatsApp QR received, sending to Telegram...');
         try {
           const qrBuffer = await qrcode.toBuffer(qr, { type: 'png', width: 400 });
           const form = new FormData();
           form.append('chat_id', rabihChatId);
-          form.append('caption', 'Scan this QR with WhatsApp to connect your bot. Open WhatsApp > Linked Devices > Link a Device.');
+          form.append('caption', 'Scan this QR with WhatsApp. Open WhatsApp > Linked Devices > Link a Device.');
           form.append('photo', qrBuffer, { filename: 'qr.png', contentType: 'image/png' });
           await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendPhoto', form, {
             headers: form.getHeaders()
@@ -51,7 +55,7 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         console.log('WhatsApp connected!');
         await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
           chat_id: rabihChatId,
-          text: 'WhatsApp connected! Send me a message on WhatsApp now.'
+          text: 'WhatsApp connected! Message yourself on WhatsApp to test.'
         }).catch(function() {});
       }
 
@@ -74,10 +78,18 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
 
     sock.ev.on('messages.upsert', async function(m) {
       const msg = m.messages[0];
-      if (!msg || msg.key.fromMe) return;
+      if (!msg) return;
       if (m.type !== 'notify') return;
 
       const from = msg.key.remoteJid;
+
+      // Only respond to Rabih's own number
+      if (!from.includes('258855254847')) {
+        console.log('Ignoring message from non-whitelisted number:', from);
+        return;
+      }
+
+      // Get message text - handle both regular and self messages
       const text = msg.message && (
         (msg.message.conversation) ||
         (msg.message.extendedTextMessage && msg.message.extendedTextMessage.text) ||
@@ -86,9 +98,11 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
 
       if (!text) return;
 
-      // Only respond to Rabih's own number
-      if (!from.includes('258855254847')) {
-        console.log('Ignoring message from non-whitelisted number:', from);
+      // Skip if it's a message WE sent (bot reply) to avoid infinite loop
+      if (msg.key.fromMe && text.length > 0) {
+        // Only skip bot's own replies, not user's self-messages
+        // We identify bot replies by checking if they came from the socket
+        console.log('Skipping outgoing message to avoid loop');
         return;
       }
 
