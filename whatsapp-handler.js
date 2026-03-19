@@ -21,7 +21,7 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
       logger,
       auth: state,
       printQRInTerminal: false,
-      browser: ['Rabih Assistant', 'Chrome', '1.0']
+      browser: ['Ubuntu', 'Chrome', '22.0.0']
     });
 
     sock.ev.on('creds.update', saveCreds);
