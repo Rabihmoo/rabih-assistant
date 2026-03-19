@@ -51,7 +51,7 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         console.log('WhatsApp connected!');
         await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
           chat_id: rabihChatId,
-          text: 'WhatsApp connected! You can now send me messages on WhatsApp.'
+          text: 'WhatsApp connected! Send me a message on WhatsApp now.'
         }).catch(function() {});
       }
 
@@ -85,13 +85,12 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
       );
 
       if (!text) return;
-      // Only respond to messages from Rabih's own number (self-chat) or specific whitelist
-const allowedNumbers = ['5140288064']; // add WhatsApp numbers here like '258841234567@s.whatsapp.net'
-const fromNumber = from.replace('@s.whatsapp.net', '').replace('@g.us', '');
-if (!allowedNumbers.some(function(n) { return from.includes(n); })) {
-  console.log('Ignoring message from non-whitelisted number:', from);
-  return;
-}
+
+      // Only respond to Rabih's own number
+      if (!from.includes('258855254847')) {
+        console.log('Ignoring message from non-whitelisted number:', from);
+        return;
+      }
 
       console.log('WhatsApp message from ' + from + ': ' + text);
 
