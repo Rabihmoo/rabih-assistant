@@ -7,7 +7,6 @@ const { driveTools, handleDriveTool } = require('./drive-direct-fix');
 const { filesTools, handleFilesTool } = require('./files-direct-fix');
 const { expenseTools, handleExpenseTool } = require('./expense-tracker');
 const { reminderTools, handleReminderTool } = require('./reminders');
-const { initWhatsApp } = require('./whatsapp-handler');
 
 const app = express();
 app.use(express.json());
