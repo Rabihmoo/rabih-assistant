@@ -85,6 +85,13 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
       );
 
       if (!text) return;
+      // Only respond to messages from Rabih's own number (self-chat) or specific whitelist
+const allowedNumbers = ['5140288064']; // add WhatsApp numbers here like '258841234567@s.whatsapp.net'
+const fromNumber = from.replace('@s.whatsapp.net', '').replace('@g.us', '');
+if (!allowedNumbers.some(function(n) { return from.includes(n); })) {
+  console.log('Ignoring message from non-whitelisted number:', from);
+  return;
+}
 
       console.log('WhatsApp message from ' + from + ': ' + text);
 
