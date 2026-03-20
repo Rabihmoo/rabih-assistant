@@ -428,6 +428,22 @@ async function handleMessage(chatId, userText, messageId) {
     await sendTelegram(chatId, 'Pending tasks:\n\n' + taskList);
     return;
   }
+  if (userText.toLowerCase().trim() === '/trades') {
+    try {
+      const { data: trades } = await supabase.from('trade_alerts').select('*').order('created_at', { ascending: false }).limit(10);
+      if (!trades || trades.length === 0) { await sendTelegram(chatId, 'No trade alerts yet.'); return; }
+      var tradeList = trades.map(function(t, i) {
+        var time = new Date(t.created_at).toLocaleString('en-GB', { timeZone: 'Africa/Maputo', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+        if (t.type === 'close') {
+          var profitVal = parseFloat(t.profit) || 0;
+          return (i+1) + '. 🔴 ' + (t.pair || '?') + ' CLOSED — ' + (profitVal > 0 ? '+' + profitVal + ' ✅' : profitVal + ' ❌') + ' (' + time + ')';
+        }
+        return (i+1) + '. 🟢 ' + (t.pair || '?') + ' ' + (t.direction || '').toUpperCase() + ' ' + (t.lot || '') + ' @ ' + (t.entry || '') + ' (' + time + ')';
+      }).join('\n');
+      await sendTelegram(chatId, 'Last 10 Trade Alerts:\n\n' + tradeList);
+    } catch (e) { await sendTelegram(chatId, 'Error loading trades: ' + e.message); }
+    return;
+  }
 
   await sendTyping(chatId);
   const [history, memoryFacts] = await Promise.all([loadHistory(chatId), loadMemory()]);
@@ -716,13 +732,92 @@ initChecklists(
   RABIH_CHAT_ID
 );
 
+// ========================= TRADE ALERTS =========================
+
+async function formatAndSendTradeAlert(data) {
+  try {
+    let msg;
+    if (data.type === 'close') {
+      const profitVal = parseFloat(data.profit) || 0;
+      msg = '🔴 TRADE CLOSED\nPair: ' + (data.pair || '?') +
+        '\nResult: ' + (profitVal > 0 ? profitVal + ' ✅' : profitVal + ' ❌') +
+        '\nPlatform: ' + (data.platform || '?');
+    } else {
+      msg = '🟢 TRADE OPENED\nPair: ' + (data.pair || '?') +
+        '\nDirection: ' + (data.direction || '?') +
+        '\nLot: ' + (data.lot || '?') +
+        '\nEntry: ' + (data.entry || '?') +
+        '\nSL: ' + (data.sl || '?') +
+        '\nTP: ' + (data.tp || '?') +
+        '\nPlatform: ' + (data.platform || '?');
+    }
+    await sendTelegram(RABIH_CHAT_ID, msg);
+  } catch (e) { console.error('Trade alert Telegram error:', e.message); }
+}
+
+async function saveTradeAlert(data) {
+  try {
+    await supabase.from('trade_alerts').insert({
+      type: data.type || null,
+      pair: data.pair || null,
+      direction: data.direction || null,
+      lot: data.lot || null,
+      entry: data.entry || null,
+      sl: data.sl || null,
+      tp: data.tp || null,
+      profit: data.profit || null,
+      platform: data.platform || null,
+      raw_payload: data
+    });
+  } catch (e) { console.error('Trade alert save error:', e.message); }
+}
+
+app.post('/trade-alert', async (req, res) => {
+  res.json({ success: true });
+  try {
+    const data = req.body || {};
+    await saveTradeAlert(data);
+    await formatAndSendTradeAlert(data);
+  } catch (e) { console.error('Trade alert error:', e.message); }
+});
+
+app.post('/tradingview-alert', async (req, res) => {
+  res.json({ success: true });
+  try {
+    const raw = req.body || {};
+    // Extract what we can from TradingView payload
+    const data = {
+      type: raw.type || raw.action || raw.order_action || (raw.strategy_order_id ? 'open' : 'open'),
+      pair: raw.pair || raw.ticker || raw.symbol || null,
+      direction: raw.direction || raw.order_action || raw.strategy_order_action || null,
+      lot: raw.lot || raw.contracts || raw.position_size || null,
+      entry: raw.entry || raw.price || raw.order_price || null,
+      sl: raw.sl || raw.stop || raw.stoploss || null,
+      tp: raw.tp || raw.limit || raw.takeprofit || null,
+      profit: raw.profit || raw.realized_pnl || null,
+      platform: raw.platform || 'TradingView',
+      raw_payload: raw
+    };
+    await saveTradeAlert(data);
+    await formatAndSendTradeAlert(data);
+  } catch (e) { console.error('TradingView alert error:', e.message); }
+});
+
+app.get('/trade-history', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('trade_alerts').select('*').order('created_at', { ascending: false }).limit(50);
+    if (error) { res.json({ success: false, error: error.message }); return; }
+    res.json({ success: true, trades: data || [] });
+  } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
 // ========================= SERVER =========================
 
 app.get('/', (req, res) => res.json({
   status: 'Rabih Assistant v5 running',
   tools: TOOLS.length,
   features: ['calendar', 'gmail', 'drive', 'files', 'expenses', 'reminders', 'whatsapp', 'phone',
-             'contacts', 'tasks', 'scheduler', 'invoices', 'location', 'news', 'voice', 'briefings', 'checklists']
+             'contacts', 'tasks', 'scheduler', 'invoices', 'location', 'news', 'voice', 'briefings', 'checklists', 'trade-alerts']
 }));
 
 app.listen(PORT, function() { console.log('Rabih Assistant v5 listening on port ' + PORT); });
