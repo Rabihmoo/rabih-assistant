@@ -1,6 +1,7 @@
-// v4
+// v5 — Full upgrade: contacts, scheduler, tasks, voice, invoices, location, news, multi-person WhatsApp
 const express = require('express');
 const axios = require('axios');
+const cron = require('node-cron');
 const { createClient } = require('@supabase/supabase-js');
 const { gmailTools, handleGmailTool } = require('./gmail-direct-fix');
 const { calendarTools, handleCalendarTool } = require('./calendar-direct-fix');
@@ -9,6 +10,13 @@ const { filesTools, handleFilesTool } = require('./files-direct-fix');
 const { expenseTools, handleExpenseTool } = require('./expense-tracker');
 const { reminderTools, handleReminderTool } = require('./reminders');
 const { communicationTools, handleCommunicationTool, setSocket } = require('./communication-tools');
+const { contactsTools, handleContactTool, isApprovedContact } = require('./contacts');
+const { taskTools, handleTaskTool, getPendingTasksSummary } = require('./task-manager');
+const { schedulerTools, handleSchedulerTool, initScheduler } = require('./scheduler');
+const { invoiceTools, handleInvoiceTool, getOverdueInvoices } = require('./invoice-tracker');
+const { locationTools, handleLocationTool } = require('./location-tools');
+const { newsTools, handleNewsTool } = require('./news-tools');
+const { transcribeAudio } = require('./voice-handler');
 const { initWhatsApp, forceNewQR } = require('./whatsapp-handler');
 
 const app = express();
@@ -25,6 +33,8 @@ const RABIH_CHAT_ID = '5140288064';
 let waEnabled = true;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ========================= MEMORY =========================
 
 async function loadMemory() {
   try {
@@ -62,6 +72,8 @@ async function extractAndSaveMemory(userText, assistantReply) {
     }
   } catch (e) { console.error('Memory extraction error:', e.message); }
 }
+
+// ========================= SYSTEM PROMPT =========================
 
 function buildSystemPrompt(memoryFacts) {
   const now = new Date();
@@ -102,6 +114,22 @@ function buildSystemPrompt(memoryFacts) {
     '- NEVER apologize or explain limitations - just use the tool',
     '- For research: search web, summarize, then act (email/WhatsApp etc) without asking',
     '',
+    'CONTACTS RULES:',
+    '- When Rabih mentions a person by name (e.g. "send Karim", "message Mama"), ALWAYS use find_contact first to get their number/email',
+    '- If the contact is not found, ask Rabih for the number and offer to save it with add_contact',
+    '- You can resolve nicknames and partial names',
+    '',
+    'SCHEDULING RULES:',
+    '- When Rabih says "tomorrow", "next Monday", "in 2 hours", "at 9am" — use schedule_action to schedule it',
+    '- Always convert relative times to absolute ISO 8601 with Maputo timezone (+02:00)',
+    '- "In 2 hours" from now = current time + 2 hours',
+    '- "Tomorrow at 9am" = next day at 09:00:00+02:00',
+    '',
+    'TASK RULES:',
+    '- When Rabih says "add to my list", "I need to", "remind me to do" — use add_task',
+    '- When he asks "what do I need to do", "my tasks" — use list_tasks',
+    '- When he says "done with X", "finished X" — use complete_task',
+    '',
     'DATA RULES:',
     '- NEVER invent or fabricate any data',
     '- Only report what tools actually returned',
@@ -115,11 +143,28 @@ function buildSystemPrompt(memoryFacts) {
   return parts.join('\n');
 }
 
+function buildStaffPrompt(contactName, contactCategory) {
+  return [
+    'You are the AI assistant of Rabih Barakat. The person messaging you is ' + (contactName || 'a contact') + ' (' + (contactCategory || 'contact') + ').',
+    'Be professional, polite, and helpful. You represent Rabih.',
+    'You can help with scheduling, taking messages, and basic information.',
+    'If they ask something you cannot handle, say you will pass the message to Rabih.',
+    'Keep responses concise. Reply in the same language they use.',
+    'Do NOT share sensitive business information, financials, or personal details about Rabih.'
+  ].join('\n');
+}
+
+// ========================= TOOLS =========================
+
 const TOOLS = [
   ...calendarTools, ...gmailTools, ...driveTools, ...filesTools,
   ...expenseTools, ...reminderTools, ...communicationTools,
+  ...contactsTools, ...taskTools, ...schedulerTools,
+  ...invoiceTools, ...locationTools, ...newsTools,
   { type: 'web_search_20250305', name: 'web_search' }
 ];
+
+// ========================= MESSAGES =========================
 
 async function saveMessage(chatId, role, content) {
   try {
@@ -139,6 +184,8 @@ async function loadHistory(chatId) {
   } catch (e) { console.error('Load history exception:', e.message); return []; }
 }
 
+// ========================= TELEGRAM =========================
+
 async function sendTelegram(chatId, text) {
   const url = 'https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendMessage';
   try { await axios.post(url, { chat_id: chatId, text: text, parse_mode: 'Markdown' }); }
@@ -148,6 +195,8 @@ async function sendTelegram(chatId, text) {
 async function sendTyping(chatId) {
   await axios.post('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendChatAction', { chat_id: chatId, action: 'typing' }).catch(function() {});
 }
+
+// ========================= TOOL EXECUTION =========================
 
 async function executeTool(toolName, toolInput) {
   console.log('Executing tool:', toolName, JSON.stringify(toolInput));
@@ -159,9 +208,17 @@ async function executeTool(toolName, toolInput) {
     if (['log_expense', 'get_expense_summary'].includes(toolName)) return await handleExpenseTool(toolName, toolInput);
     if (['set_reminder', 'add_supplier', 'find_supplier'].includes(toolName)) return await handleReminderTool(toolName, toolInput);
     if (['send_whatsapp_message', 'make_phone_call'].includes(toolName)) return await handleCommunicationTool(toolName, toolInput);
+    if (['add_contact', 'find_contact', 'list_contacts'].includes(toolName)) return await handleContactTool(toolName, toolInput);
+    if (['add_task', 'list_tasks', 'complete_task', 'delete_task'].includes(toolName)) return await handleTaskTool(toolName, toolInput);
+    if (['schedule_action', 'list_scheduled', 'cancel_scheduled'].includes(toolName)) return await handleSchedulerTool(toolName, toolInput);
+    if (['log_invoice', 'list_unpaid_invoices', 'mark_invoice_paid'].includes(toolName)) return await handleInvoiceTool(toolName, toolInput);
+    if (['search_places', 'get_directions'].includes(toolName)) return await handleLocationTool(toolName, toolInput);
+    if (['get_news', 'get_exchange_rate'].includes(toolName)) return await handleNewsTool(toolName, toolInput);
     return { error: 'Unknown tool' };
   } catch (e) { console.error('Tool error:', e.message); return { error: e.message }; }
 }
+
+// ========================= CLAUDE =========================
 
 function sanitizeHistory(messages) {
   const clean = [];
@@ -169,25 +226,28 @@ function sanitizeHistory(messages) {
     const msg = messages[i];
     if (!msg || !msg.role || (!msg.content && msg.content !== '')) continue;
     if (clean.length > 0 && clean[clean.length - 1].role === msg.role) {
-      // Consecutive same role — keep the latest one for user, skip for assistant
       if (msg.role === 'user') clean[clean.length - 1] = msg;
       continue;
     }
     clean.push(msg);
   }
-  // Must start with user
   while (clean.length > 0 && clean[0].role !== 'user') clean.shift();
-  // Must end properly — if last is assistant and we're about to add user, that's fine
   return clean;
 }
 
-async function callClaude(messages, memoryFacts) {
+async function callClaude(messages, memoryFacts, systemOverride) {
   const safeMessages = sanitizeHistory(messages);
   console.log('Calling Claude with', safeMessages.length, 'messages (raw:', messages.length, ')...');
   try {
     const res = await axios.post(
       'https://api.anthropic.com/v1/messages',
-      { model: 'claude-sonnet-4-6', max_tokens: 4096, system: buildSystemPrompt(memoryFacts || []), tools: TOOLS, messages: safeMessages },
+      {
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4096,
+        system: systemOverride || buildSystemPrompt(memoryFacts || []),
+        tools: TOOLS,
+        messages: safeMessages
+      },
       { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 60000 }
     );
     console.log('Claude stop_reason:', res.data.stop_reason);
@@ -199,6 +259,30 @@ async function callClaude(messages, memoryFacts) {
     throw err;
   }
 }
+
+// ========================= TOOL LOOP =========================
+
+async function runToolLoop(history, memoryFacts, systemOverride) {
+  let response = await callClaude(history, memoryFacts, systemOverride);
+  let rounds = 0;
+  while (response.stop_reason === 'tool_use' && rounds < 5) {
+    rounds++;
+    const toolUseBlocks = response.content.filter(function(b) { return b.type === 'tool_use'; });
+    if (!toolUseBlocks.length) break;
+    history.push({ role: 'assistant', content: response.content });
+    const toolResults = [];
+    for (let i = 0; i < toolUseBlocks.length; i++) {
+      const toolUse = toolUseBlocks[i];
+      const result = await executeTool(toolUse.name, toolUse.input);
+      toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
+    }
+    history.push({ role: 'user', content: toolResults });
+    response = await callClaude(history, memoryFacts, systemOverride);
+  }
+  return response;
+}
+
+// ========================= TELEGRAM MESSAGE HANDLER =========================
 
 async function handleMessage(chatId, userText, messageId) {
   const dedupKey = '__dedup__' + String(messageId);
@@ -239,30 +323,22 @@ async function handleMessage(chatId, userText, messageId) {
   }
   if (userText.toLowerCase().trim() === '/wa_qr') {
     forceNewQR();
-    await sendTelegram(chatId, 'QR flag cleared. A new QR will be sent within 30 seconds. If nothing arrives, send /wa_qr again.');
+    await sendTelegram(chatId, 'QR flag cleared. A new QR will be sent within 30 seconds.');
+    return;
+  }
+  if (userText.toLowerCase().trim() === '/tasks') {
+    const tasks = await getPendingTasksSummary();
+    if (!tasks.count) { await sendTelegram(chatId, 'No pending tasks.'); return; }
+    var taskList = tasks.tasks.map(function(t, i) { return (i+1) + '. [' + t.priority + '] ' + t.title + (t.due_date ? ' (due: ' + t.due_date + ')' : ''); }).join('\n');
+    await sendTelegram(chatId, 'Pending tasks:\n\n' + taskList);
     return;
   }
 
   await sendTyping(chatId);
   const [history, memoryFacts] = await Promise.all([loadHistory(chatId), loadMemory()]);
   history.push({ role: 'user', content: userText });
-  let response = await callClaude(history, memoryFacts);
-  let rounds = 0;
-  while (response.stop_reason === 'tool_use' && rounds < 5) {
-    rounds++;
-    const toolUseBlocks = response.content.filter(function(b) { return b.type === 'tool_use'; });
-    if (!toolUseBlocks.length) break;
-    await sendTyping(chatId);
-    history.push({ role: 'assistant', content: response.content });
-    const toolResults = [];
-    for (let i = 0; i < toolUseBlocks.length; i++) {
-      const toolUse = toolUseBlocks[i];
-      const result = await executeTool(toolUse.name, toolUse.input);
-      toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
-    }
-    history.push({ role: 'user', content: toolResults });
-    response = await callClaude(history, memoryFacts);
-  }
+
+  const response = await runToolLoop(history, memoryFacts);
   const textBlock = response.content.find(function(b) { return b.type === 'text'; });
   const finalReply = textBlock ? textBlock.text : 'Done!';
   await saveMessage(chatId, 'user', userText);
@@ -275,7 +351,7 @@ async function handleMediaMessage(chatId, messages) {
   try {
     await sendTyping(chatId);
     const memoryFacts = await loadMemory();
-    const response = await callClaude(messages, memoryFacts);
+    const response = await runToolLoop(messages, memoryFacts);
     const textBlock = response.content.find(function(b) { return b.type === 'text'; });
     await sendTelegram(chatId, textBlock ? textBlock.text : 'Could not process this file.');
   } catch (err) {
@@ -284,6 +360,8 @@ async function handleMediaMessage(chatId, messages) {
   }
 }
 
+// ========================= TELEGRAM WEBHOOK =========================
+
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
   try {
@@ -291,6 +369,30 @@ app.post('/webhook', async (req, res) => {
     if (!msg) return;
     const chatId = msg.chat.id;
     const messageId = msg.message_id;
+
+    // Handle voice messages from Telegram
+    if (msg.voice || msg.audio) {
+      const fileId = msg.voice ? msg.voice.file_id : msg.audio.file_id;
+      const mimeType = msg.voice ? 'audio/ogg' : (msg.audio.mime_type || 'audio/mpeg');
+      try {
+        await sendTyping(chatId);
+        const fileRes = await axios.get('https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/getFile?file_id=' + fileId);
+        const filePath = fileRes.data.result.file_path;
+        const audioRes = await axios.get('https://api.telegram.org/file/bot' + TELEGRAM_TOKEN + '/' + filePath, { responseType: 'arraybuffer' });
+        const audioBuffer = Buffer.from(audioRes.data);
+        const transcription = await transcribeAudio(audioBuffer, mimeType);
+        if (transcription.error) {
+          await sendTelegram(chatId, 'Voice transcription failed: ' + transcription.error);
+          return;
+        }
+        await sendTelegram(chatId, '_Transcribed:_ ' + transcription.text);
+        await handleMessage(chatId, transcription.text, messageId);
+      } catch (err) {
+        await sendTelegram(chatId, 'Voice processing error: ' + err.message);
+      }
+      return;
+    }
+
     if (msg.photo) {
       const photo = msg.photo[msg.photo.length - 1];
       const caption = msg.caption || 'What is in this image? Describe and analyze it fully.';
@@ -324,85 +426,193 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-setInterval(async function() {
-  const now = new Date();
-  const maputoHour = (now.getUTCHours() + 2) % 24;
-  const maputoMin = now.getUTCMinutes();
-  if (maputoHour === 7 && maputoMin === 0) {
-    console.log('Sending morning briefing...');
-    try {
-      const memoryFacts = await loadMemory();
-      const history = [{ role: 'user', content: 'Good morning! Give me my morning briefing: 1) My calendar events for today and tomorrow 2) Any unread important emails from the last 12 hours. Be concise and direct.' }];
-      let response = await callClaude(history, memoryFacts);
-      let rounds = 0;
-      while (response.stop_reason === 'tool_use' && rounds < 5) {
-        rounds++;
-        const toolUseBlocks = response.content.filter(function(b) { return b.type === 'tool_use'; });
-        if (!toolUseBlocks.length) break;
-        history.push({ role: 'assistant', content: response.content });
-        const toolResults = [];
-        for (let i = 0; i < toolUseBlocks.length; i++) {
-          const toolUse = toolUseBlocks[i];
-          const result = await executeTool(toolUse.name, toolUse.input);
-          toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
-        }
-        history.push({ role: 'user', content: toolResults });
-        response = await callClaude(history, memoryFacts);
-      }
-      const textBlock = response.content.find(function(b) { return b.type === 'text'; });
-      const briefing = textBlock ? textBlock.text : 'Good morning Rabih!';
-      await sendTelegram(RABIH_CHAT_ID, 'Good morning Rabih!\n\n' + briefing);
-    } catch (err) { console.error('Morning briefing error:', err.message); }
-  }
-}, 60000);
+// ========================= BRIEFINGS =========================
 
-initWhatsApp(TELEGRAM_TOKEN, RABIH_CHAT_ID, async function(text, source, from) {
-  if (!waEnabled) {
-    console.log('WhatsApp auto-reply is OFF - ignoring: ' + text.substring(0, 50));
-    return null;
-  }
+// Morning briefing — 7:00 AM Maputo (5:00 UTC)
+cron.schedule('0 5 * * *', async function() {
+  console.log('Sending morning briefing...');
   try {
-    const waHistory = await loadHistory('wa_' + from);
-    const waMemory = await loadMemory();
-    waHistory.push({ role: 'user', content: text });
-    let waResponse = await callClaude(waHistory, waMemory);
-    let waRounds = 0;
-    while (waResponse.stop_reason === 'tool_use' && waRounds < 5) {
-      waRounds++;
-      const waToolBlocks = waResponse.content.filter(function(b) { return b.type === 'tool_use'; });
-      if (!waToolBlocks.length) break;
-      waHistory.push({ role: 'assistant', content: waResponse.content });
-      const waResults = [];
-      for (let i = 0; i < waToolBlocks.length; i++) {
-        const t = waToolBlocks[i];
-        const r = await executeTool(t.name, t.input);
-        waResults.push({ type: 'tool_result', tool_use_id: t.id, content: JSON.stringify(r) });
+    const memoryFacts = await loadMemory();
+    const history = [{ role: 'user', content: 'Good morning! Give me my morning briefing:\n1) Calendar events for today and tomorrow\n2) Unread important emails from the last 12 hours\n3) Any pending high-priority tasks\n4) USD/MZN exchange rate\n5) Overdue invoices if any\nBe concise and direct.' }];
+    const response = await runToolLoop(history, memoryFacts);
+    const textBlock = response.content.find(function(b) { return b.type === 'text'; });
+    await sendTelegram(RABIH_CHAT_ID, 'Good morning Rabih!\n\n' + (textBlock ? textBlock.text : 'Could not generate briefing.'));
+  } catch (err) { console.error('Morning briefing error:', err.message); }
+});
+
+// Evening summary — 9:00 PM Maputo (19:00 UTC)
+cron.schedule('0 19 * * *', async function() {
+  console.log('Sending evening summary...');
+  try {
+    const memoryFacts = await loadMemory();
+    const history = [{ role: 'user', content: 'End of day summary:\n1) Expenses logged today\n2) Tasks completed today and still pending\n3) Any unread important emails\n4) Reminders and calendar events for tomorrow\n5) Overdue invoices\nBe concise.' }];
+    const response = await runToolLoop(history, memoryFacts);
+    const textBlock = response.content.find(function(b) { return b.type === 'text'; });
+    await sendTelegram(RABIH_CHAT_ID, 'Evening Summary\n\n' + (textBlock ? textBlock.text : 'Could not generate summary.'));
+  } catch (err) { console.error('Evening summary error:', err.message); }
+});
+
+// Weekly Monday briefing — 7:15 AM Maputo on Mondays (5:15 UTC)
+cron.schedule('15 5 * * 1', async function() {
+  console.log('Sending weekly briefing...');
+  try {
+    const memoryFacts = await loadMemory();
+    const history = [{ role: 'user', content: 'Weekly Monday briefing:\n1) Calendar overview for this entire week\n2) All pending tasks by priority\n3) Unpaid invoices and total amounts\n4) Expense summary for last week\n5) Any overdue items\nBe thorough but organized.' }];
+    const response = await runToolLoop(history, memoryFacts);
+    const textBlock = response.content.find(function(b) { return b.type === 'text'; });
+    await sendTelegram(RABIH_CHAT_ID, 'Weekly Briefing — Monday\n\n' + (textBlock ? textBlock.text : 'Could not generate briefing.'));
+  } catch (err) { console.error('Weekly briefing error:', err.message); }
+});
+
+// Overdue invoice alert — check daily at 10:00 AM Maputo (8:00 UTC)
+cron.schedule('0 8 * * *', async function() {
+  try {
+    const overdue = await getOverdueInvoices();
+    if (overdue.length > 0) {
+      var total = overdue.reduce(function(sum, inv) { return sum + (parseFloat(inv.amount) || 0); }, 0);
+      var msg = 'OVERDUE INVOICES (' + overdue.length + ' total, ' + total.toFixed(2) + '):\n\n';
+      overdue.forEach(function(inv) {
+        msg += '• ' + inv.vendor + ' — ' + inv.amount + ' ' + inv.currency + ' (due: ' + inv.due_date + ')\n';
+      });
+      await sendTelegram(RABIH_CHAT_ID, msg);
+    }
+  } catch (err) { console.error('Invoice alert error:', err.message); }
+});
+
+// ========================= WHATSAPP =========================
+
+initWhatsApp({
+  telegramToken: TELEGRAM_TOKEN,
+  rabihChatId: RABIH_CHAT_ID,
+
+  // Rabih's own messages — full assistant
+  onRabihMessage: async function(text, source, from) {
+    if (!waEnabled) {
+      console.log('WhatsApp auto-reply is OFF - ignoring: ' + text.substring(0, 50));
+      return null;
+    }
+    try {
+      const waHistory = await loadHistory('wa_' + from);
+      const waMemory = await loadMemory();
+      waHistory.push({ role: 'user', content: text });
+      const response = await runToolLoop(waHistory, waMemory);
+      const waText = response.content.find(function(b) { return b.type === 'text'; });
+      const waReply = waText ? waText.text : 'Done!';
+      await saveMessage('wa_' + from, 'user', text);
+      await saveMessage('wa_' + from, 'assistant', waReply);
+      return waReply;
+    } catch (err) {
+      const errDetail = (err.response && err.response.data) ? JSON.stringify(err.response.data).substring(0, 300) : err.message;
+      console.error('WhatsApp Claude error:', errDetail);
+      if (err.response && err.response.status === 400) {
+        await supabase.from('assistant_messages').delete().eq('chat_id', 'wa_' + from);
+        return 'Had a memory issue — cleared history. Please send your message again.';
       }
-      waHistory.push({ role: 'user', content: waResults });
-      waResponse = await callClaude(waHistory, waMemory);
+      return 'Error: ' + err.message;
     }
-    const waText = waResponse.content.find(function(b) { return b.type === 'text'; });
-    const waReply = waText ? waText.text : 'Done!';
-    await saveMessage('wa_' + from, 'user', text);
-    await saveMessage('wa_' + from, 'assistant', waReply);
-    return waReply;
-  } catch (err) {
-    const errDetail = (err.response && err.response.data) ? JSON.stringify(err.response.data).substring(0, 300) : err.message;
-    console.error('WhatsApp Claude error:', errDetail);
-    // If 400 error, history is likely corrupted — clear it
-    if (err.response && err.response.status === 400) {
-      console.error('Clearing corrupted WhatsApp history for wa_' + from);
-      await supabase.from('assistant_messages').delete().eq('chat_id', 'wa_' + from);
-      return 'Had a memory issue — cleared my WhatsApp history. Please send your message again.';
+  },
+
+  // Messages from other people — log, notify Rabih, optionally auto-reply
+  onOtherMessage: async function(text, senderNumber, senderJid) {
+    console.log('WhatsApp from other:', senderNumber, text.substring(0, 80));
+    try {
+      // Log to Supabase
+      var contactInfo = await isApprovedContact(senderNumber);
+      var senderName = contactInfo ? contactInfo.name : senderNumber;
+      await supabase.from('whatsapp_logs').insert({
+        from_number: senderNumber,
+        from_name: senderName,
+        message: text,
+        direction: 'incoming'
+      });
+
+      // Notify Rabih on Telegram
+      await sendTelegram(RABIH_CHAT_ID, 'WhatsApp from *' + senderName + '* (' + senderNumber + '):\n\n' + text.substring(0, 500));
+
+      // If approved contact (staff, business), auto-reply as Rabih's assistant
+      if (contactInfo && ['staff', 'business', 'supplier'].includes(contactInfo.category)) {
+        var staffHistory = [{ role: 'user', content: text }];
+        var staffSystem = buildStaffPrompt(contactInfo.name, contactInfo.category);
+        var response = await callClaude(staffHistory, null, staffSystem);
+        var reply = response.content.find(function(b) { return b.type === 'text'; });
+        if (reply) {
+          await supabase.from('whatsapp_logs').insert({
+            from_number: senderNumber,
+            from_name: 'Assistant',
+            message: reply.text,
+            direction: 'outgoing'
+          });
+          return reply.text;
+        }
+      }
+      // Unknown contacts — no auto-reply, just log and notify
+      return null;
+    } catch (err) {
+      console.error('Other message handler error:', err.message);
+      return null;
     }
-    return 'Error: ' + err.message;
+  },
+
+  // Voice messages from WhatsApp
+  onVoiceMessage: async function(audioBuffer, mimeType, from, isFromRabih) {
+    try {
+      var transcription = await transcribeAudio(audioBuffer, mimeType);
+      if (transcription.error) {
+        console.error('Voice transcription error:', transcription.error);
+        return 'Could not transcribe voice message: ' + transcription.error;
+      }
+      console.log('Voice transcribed:', transcription.text.substring(0, 80));
+
+      if (isFromRabih) {
+        if (!waEnabled) return null;
+        // Process as normal Rabih message
+        var waHistory = await loadHistory('wa_258855254847@s.whatsapp.net');
+        var waMemory = await loadMemory();
+        waHistory.push({ role: 'user', content: '[Voice message] ' + transcription.text });
+        var response = await runToolLoop(waHistory, waMemory);
+        var reply = response.content.find(function(b) { return b.type === 'text'; });
+        var replyText = reply ? reply.text : 'Done!';
+        await saveMessage('wa_258855254847@s.whatsapp.net', 'user', '[Voice] ' + transcription.text);
+        await saveMessage('wa_258855254847@s.whatsapp.net', 'assistant', replyText);
+        return replyText;
+      } else {
+        // Voice from others — transcribe, log, notify
+        var senderNumber = from.replace('@s.whatsapp.net', '').replace('@lid', '');
+        var contactInfo = await isApprovedContact(senderNumber);
+        var senderName = contactInfo ? contactInfo.name : senderNumber;
+        await supabase.from('whatsapp_logs').insert({
+          from_number: senderNumber,
+          from_name: senderName,
+          message: '[Voice] ' + transcription.text,
+          direction: 'incoming'
+        });
+        await sendTelegram(RABIH_CHAT_ID, 'Voice from *' + senderName + '* (' + senderNumber + '):\n\n' + transcription.text.substring(0, 500));
+        return null;
+      }
+    } catch (err) {
+      console.error('Voice handler error:', err.message);
+      return 'Error processing voice message.';
+    }
   }
 });
 
+// Sync WhatsApp socket to communication-tools
 setInterval(function() {
   const sock = require('./whatsapp-handler').getWhatsAppSocket();
   if (sock) setSocket(sock);
 }, 5000);
 
-app.get('/', (req, res) => res.json({ status: 'Rabih Assistant running', tools: 'enabled' }));
-app.listen(PORT, function() { console.log('Rabih Assistant listening on port ' + PORT); });
+// ========================= SCHEDULER INIT =========================
+
+initScheduler(executeTool, sendTelegram, RABIH_CHAT_ID);
+
+// ========================= SERVER =========================
+
+app.get('/', (req, res) => res.json({
+  status: 'Rabih Assistant v5 running',
+  tools: TOOLS.length,
+  features: ['calendar', 'gmail', 'drive', 'files', 'expenses', 'reminders', 'whatsapp', 'phone',
+             'contacts', 'tasks', 'scheduler', 'invoices', 'location', 'news', 'voice', 'briefings']
+}));
+
+app.listen(PORT, function() { console.log('Rabih Assistant v5 listening on port ' + PORT); });
