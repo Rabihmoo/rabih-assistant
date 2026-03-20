@@ -476,7 +476,7 @@ async function handleMessage(chatId, userText, messageId) {
   }
   if (userText.toLowerCase().trim() === '/wa_off') {
     setWaEnabled(false);
-    await sendTelegram(chatId, 'WhatsApp auto-reply is now OFF. No one gets auto-replies. Send /wa_on to re-enable.');
+    await sendTelegram(chatId, 'WhatsApp auto-reply is now OFF for others. Your own messages still work. Send /wa_on to re-enable.');
     return;
   }
   if (userText.toLowerCase().trim() === '/wa_status') {
@@ -665,12 +665,8 @@ initWhatsApp({
   telegramToken: TELEGRAM_TOKEN,
   rabihChatId: RABIH_CHAT_ID,
 
-  // Rabih's own messages — full assistant
+  // Rabih's own messages — full assistant (ALWAYS processed, even when /wa_off)
   onRabihMessage: async function(text, source, from) {
-    if (!getWaEnabled()) {
-      console.log('WhatsApp auto-reply is OFF - ignoring: ' + text.substring(0, 50));
-      return null;
-    }
     try {
       var waHistory = await loadHistory('wa_' + from);
       var waMemory = await loadMemory();
@@ -810,8 +806,7 @@ initWhatsApp({
       console.log('Voice transcribed:', transcription.text.substring(0, 80));
 
       if (isFromRabih) {
-        if (!getWaEnabled()) return null;
-        // Process as normal Rabih message
+        // Always process Rabih's voice messages, even when /wa_off
         var waHistory = await loadHistory('wa_258875254847@s.whatsapp.net');
         var waMemory = await loadMemory();
         if (waHistory.length > 10) waHistory = waHistory.slice(-10);
