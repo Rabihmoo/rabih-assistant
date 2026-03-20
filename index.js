@@ -101,11 +101,13 @@ function buildSystemPrompt(memoryFacts) {
     '',
     'Your personality:',
     '- You are like a smart trusted friend who knows Rabih deeply',
-    '- Concise, direct, warm - adapt your tone to how he talks',
+    '- Concise, direct, warm — a little funny sometimes, never robotic',
     '- Reply in the same language Rabih uses',
     '- Never say you are an AI unless directly asked',
     '- Remember everything, never ask him to repeat himself',
     '- Anticipate what he needs based on context',
+    '- NEVER use bullet points, numbered lists, or markdown formatting in WhatsApp replies — just natural flowing text like a real person texting',
+    '- Keep replies short and to the point, like texting a friend',
     '',
     'TOOL USAGE RULES — ABSOLUTE, NO EXCEPTIONS:',
     'CRITICAL: You MUST call the actual tool. Never say you sent a message, created a task, or did anything without calling the tool first. If you cannot call a tool, say you cannot — never pretend you did.',
@@ -172,14 +174,37 @@ function buildSystemPrompt(memoryFacts) {
   return parts.join('\n');
 }
 
-function buildStaffPrompt(contactName, contactCategory) {
+function buildStaffPrompt(contactName, contactCategory, hasHistory) {
+  var now = new Date();
+  var time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  var today = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   return [
-    'You are the AI assistant of Rabih Barakat. The person messaging you is ' + (contactName || 'a contact') + ' (' + (contactCategory || 'contact') + ').',
-    'Be professional, polite, and helpful. You represent Rabih.',
-    'You can help with scheduling, taking messages, and basic information.',
-    'If they ask something you cannot handle, say you will pass the message to Rabih.',
-    'Keep responses concise. Reply in the same language they use.',
-    'Do NOT share sensitive business information, financials, or personal details about Rabih.'
+    'You are the assistant of Rabih Barakat, a Lebanese businessman in Maputo, Mozambique.',
+    'The person messaging you is ' + (contactName || 'someone') + ' (' + (contactCategory || 'contact') + ').',
+    'Today is ' + today + ', current time is ' + time + ' (Maputo, UTC+2).',
+    '',
+    'PERSONALITY:',
+    '- Be warm, professional, and a little bit friendly/funny — like a real human assistant texting.',
+    '- Write naturally like a person, not a robot. No bullet points, no numbered lists, no markdown formatting.',
+    '- Keep messages short and flowing, like how people actually text.',
+    '- Reply in the same language they use (Arabic or English or Portuguese).',
+    '',
+    'INTRODUCTION RULES:',
+    hasHistory
+      ? '- This person has chatted before. Do NOT introduce yourself. Just continue the conversation naturally. Never say "I am Rabih\'s assistant" unless they directly ask who they are talking to.'
+      : '- This is the FIRST message from this person. Briefly introduce yourself as Rabih\'s assistant in a warm natural way. After that, never repeat the introduction.',
+    '',
+    'MEETING / APPOINTMENT REQUESTS:',
+    '- If someone wants to meet Rabih, schedule a meeting, or book an appointment — do NOT confirm or book it.',
+    '- Collect the details: what they want to discuss, preferred date/time, and their contact info.',
+    '- Tell them: "Let me check with Rabih and get back to you."',
+    '- You do NOT have access to book meetings. The system will notify Rabih separately.',
+    '',
+    'CONVERSATION RULES:',
+    '- If previous conversation history is provided, remember the context. Never ask for information already given.',
+    '- If they ask something you cannot handle, say you will pass it to Rabih.',
+    '- Do NOT share sensitive business information, financials, or personal details about Rabih.',
+    '- If they just want to leave a message for Rabih, take it warmly and confirm you will pass it along.'
   ].join('\n');
 }
 
@@ -658,6 +683,7 @@ initWhatsApp({
       const errDetail = (err.response && err.response.data) ? JSON.stringify(err.response.data).substring(0, 300) : err.message;
       console.error('WhatsApp Claude error:', errDetail);
       if (err.response && err.response.status === 400) {
+        console.error('MEMORY CLEAR TRIGGERED — 400 error from Claude API. chat_id: wa_' + from + ', error detail:', errDetail);
         await supabase.from('assistant_messages').delete().eq('chat_id', 'wa_' + from);
         return 'Had a memory issue — cleared history. Please send your message again.';
       }
@@ -694,23 +720,59 @@ initWhatsApp({
         return null;
       }
 
-      // If approved contact (staff, business), auto-reply as Rabih's assistant
-      if (contactInfo && ['staff', 'business', 'supplier'].includes(contactInfo.category)) {
-        var staffHistory = [{ role: 'user', content: text }];
-        var staffSystem = buildStaffPrompt(contactInfo.name, contactInfo.category);
-        var response = await callClaude(staffHistory, null, staffSystem, HAIKU_MODEL);
-        var reply = response.content.find(function(b) { return b.type === 'text'; });
-        if (reply) {
-          await supabase.from('whatsapp_logs').insert({
-            from_number: senderNumber,
-            from_name: 'Assistant',
-            message: reply.text,
-            direction: 'outgoing'
-          });
-          return reply.text;
-        }
+      // Auto-reply to approved contacts (staff, business, supplier) and unknown contacts
+      var shouldReply = contactInfo && ['staff', 'business', 'supplier'].includes(contactInfo.category);
+      if (!shouldReply) {
+        // Unknown contacts — no auto-reply, just log and notify
+        return null;
       }
-      // Unknown contacts — no auto-reply, just log and notify
+
+      // Load conversation history for this contact so the assistant has context
+      var staffChatId = 'wa_staff_' + senderNumber;
+      var staffHistory = await loadHistory(staffChatId);
+      var hasHistory = staffHistory.length > 0;
+      if (staffHistory.length > 10) staffHistory = staffHistory.slice(-10);
+      staffHistory.push({ role: 'user', content: text });
+
+      var staffSystem = buildStaffPrompt(contactInfo.name, contactInfo.category, hasHistory);
+      var response = await callClaude(staffHistory, null, staffSystem, HAIKU_MODEL);
+      var reply = response.content.find(function(b) { return b.type === 'text'; });
+      if (reply) {
+        // Save conversation history for continuity
+        await saveMessage(staffChatId, 'user', text);
+        await saveMessage(staffChatId, 'assistant', reply.text);
+
+        await supabase.from('whatsapp_logs').insert({
+          from_number: senderNumber,
+          from_name: 'Assistant',
+          message: reply.text,
+          direction: 'outgoing'
+        });
+
+        // Detect meeting requests and store as pending
+        var lowerText = text.toLowerCase();
+        var meetingKeywords = ['meet', 'meeting', 'appointment', 'schedule', 'book', 'sit down', 'come by', 'visit', 'rendez-vous', 'اجتماع', 'موعد'];
+        var isMeetingRequest = meetingKeywords.some(function(kw) { return lowerText.includes(kw); });
+        if (isMeetingRequest) {
+          try {
+            await supabase.from('pending_meetings').insert({
+              requester_name: contactInfo.name || senderNumber,
+              requester_number: senderNumber,
+              message: text,
+              status: 'waiting'
+            });
+            await sendTelegram(RABIH_CHAT_ID,
+              'Meeting request from *' + (contactInfo.name || senderNumber) + '* (' + senderNumber + '):\n\n' +
+              text.substring(0, 500) + '\n\n' +
+              'Reply YES to confirm or NO to decline.'
+            );
+          } catch (meetErr) {
+            console.error('Failed to save pending meeting:', meetErr.message);
+          }
+        }
+
+        return reply.text;
+      }
       return null;
     } catch (err) {
       console.error('Other message handler error:', err.message);
