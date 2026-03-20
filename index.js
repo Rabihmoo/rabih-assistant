@@ -193,12 +193,18 @@ function buildStaffPrompt(contactName, contactCategory, hasHistory) {
     hasHistory
       ? '- This person has chatted before. Do NOT introduce yourself. Just continue the conversation naturally. Never say "I am Rabih\'s assistant" unless they directly ask who they are talking to.'
       : '- This is the FIRST message from this person. Briefly introduce yourself as Rabih\'s assistant in a warm natural way. After that, never repeat the introduction.',
+    '- If someone asks who you are or who they are talking to, keep it simple and vague: say "I help manage things for Rabih" or "I\'m Rabih\'s assistant". NEVER list what you handle (calendar, emails, tasks, scheduling, etc). A real EA would never list their job duties in a text message.',
     '',
     'MEETING / APPOINTMENT REQUESTS:',
     '- If someone wants to meet Rabih, schedule a meeting, or book an appointment — do NOT confirm or book it.',
     '- Collect the details: what they want to discuss, preferred date/time, and their contact info.',
     '- Tell them: "Let me check with Rabih and get back to you."',
     '- You do NOT have access to book meetings. The system will notify Rabih separately.',
+    '',
+    'PASSING MESSAGES TO RABIH — CRITICAL:',
+    '- When you tell someone you will pass their message to Rabih, check their conversation for what they need, or ask Rabih about something — the system will handle notifying Rabih automatically.',
+    '- NEVER say "I have notified Rabih" or "message sent to Rabih" — just say "I\'ll pass this to Rabih" or "let me check with him". The notification happens on the backend.',
+    '- NEVER lie about having contacted Rabih. Keep it honest: "I\'ll let him know" is enough.',
     '',
     'CONVERSATION RULES:',
     '- If previous conversation history is provided, remember the context. Never ask for information already given.',
@@ -769,6 +775,19 @@ initWhatsApp({
           } catch (meetErr) {
             console.error('Failed to save pending meeting:', meetErr.message);
           }
+        }
+
+        // If the assistant promised to pass a message / check with Rabih, actually notify him with full context
+        var replyLower = reply.text.toLowerCase();
+        var passKeywords = ['pass this to rabih', 'let him know', 'let rabih know', 'check with rabih', 'check with him', 'tell rabih', 'inform rabih', 'pass it to rabih', 'pass it along', 'أخبر ربيع', 'أبلغ ربيع'];
+        var promisedToNotify = passKeywords.some(function(kw) { return replyLower.includes(kw); });
+        if (promisedToNotify && !isMeetingRequest) {
+          // Don't duplicate — meeting requests already notify above
+          await sendTelegram(RABIH_CHAT_ID,
+            'Message for you from *' + (contactInfo.name || senderNumber) + '* (' + senderNumber + '):\n\n' +
+            text.substring(0, 500) + '\n\n' +
+            '_The assistant told them you\'d be informed._'
+          ).catch(function(e) { console.error('Failed to notify Rabih about passed message:', e.message); });
         }
 
         return reply.text;
