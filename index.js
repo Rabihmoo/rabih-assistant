@@ -30,8 +30,16 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const PORT = process.env.PORT || 3000;
 const RABIH_CHAT_ID = '5140288064';
 
-// WhatsApp auto-reply toggle
-let waEnabled = true;
+// WhatsApp auto-reply toggle — persisted to disk so it survives redeploys
+const WA_TOGGLE_FILE = (require('fs').existsSync('/data') ? '/data' : '/tmp') + '/wa_enabled';
+function getWaEnabled() {
+  try { return require('fs').readFileSync(WA_TOGGLE_FILE, 'utf8').trim() !== '0'; }
+  catch(e) { return true; } // default ON if no file
+}
+function setWaEnabled(on) {
+  try { require('fs').writeFileSync(WA_TOGGLE_FILE, on ? '1' : '0'); }
+  catch(e) { console.error('Failed to persist WA toggle:', e.message); }
+}
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -431,17 +439,17 @@ async function handleMessage(chatId, userText, messageId) {
     return;
   }
   if (userText.toLowerCase().trim() === '/wa_on') {
-    waEnabled = true;
-    await sendTelegram(chatId, 'WhatsApp auto-reply is now ON.');
+    setWaEnabled(true);
+    await sendTelegram(chatId, 'WhatsApp auto-reply is now ON (all replies enabled).');
     return;
   }
   if (userText.toLowerCase().trim() === '/wa_off') {
-    waEnabled = false;
-    await sendTelegram(chatId, 'WhatsApp auto-reply is now OFF. Send /wa_on to re-enable.');
+    setWaEnabled(false);
+    await sendTelegram(chatId, 'WhatsApp auto-reply is now OFF. No one gets auto-replies. Send /wa_on to re-enable.');
     return;
   }
   if (userText.toLowerCase().trim() === '/wa_status') {
-    await sendTelegram(chatId, 'WhatsApp auto-reply is currently ' + (waEnabled ? 'ON' : 'OFF') + '.');
+    await sendTelegram(chatId, 'WhatsApp auto-reply is currently ' + (getWaEnabled() ? 'ON' : 'OFF') + '.');
     return;
   }
   if (userText.toLowerCase().trim() === '/wa_qr') {
@@ -628,7 +636,7 @@ initWhatsApp({
 
   // Rabih's own messages — full assistant
   onRabihMessage: async function(text, source, from) {
-    if (!waEnabled) {
+    if (!getWaEnabled()) {
       console.log('WhatsApp auto-reply is OFF - ignoring: ' + text.substring(0, 50));
       return null;
     }
@@ -661,7 +669,7 @@ initWhatsApp({
   onOtherMessage: async function(text, senderNumber, senderJid) {
     console.log('WhatsApp from other:', senderNumber, text.substring(0, 80));
     try {
-      // Check if this is a checklist response first
+      // Check if this is a checklist response first (always process, even when WA is off)
       var isChecklistReply = await processChecklistResponse(senderNumber, text, null);
       if (isChecklistReply) {
         return 'Thank you! Your checklist response has been recorded. ✅';
@@ -677,8 +685,14 @@ initWhatsApp({
         direction: 'incoming'
       });
 
-      // Notify Rabih on Telegram
+      // Notify Rabih on Telegram (always, even when WA is off — so you see incoming messages)
       await sendTelegram(RABIH_CHAT_ID, 'WhatsApp from *' + senderName + '* (' + senderNumber + '):\n\n' + text.substring(0, 500));
+
+      // If WA is off, log but don't auto-reply to anyone
+      if (!getWaEnabled()) {
+        console.log('WhatsApp auto-reply is OFF - not replying to', senderNumber);
+        return null;
+      }
 
       // If approved contact (staff, business), auto-reply as Rabih's assistant
       if (contactInfo && ['staff', 'business', 'supplier'].includes(contactInfo.category)) {
@@ -715,7 +729,7 @@ initWhatsApp({
       console.log('Voice transcribed:', transcription.text.substring(0, 80));
 
       if (isFromRabih) {
-        if (!waEnabled) return null;
+        if (!getWaEnabled()) return null;
         // Process as normal Rabih message
         var waHistory = await loadHistory('wa_258875254847@s.whatsapp.net');
         var waMemory = await loadMemory();
