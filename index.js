@@ -100,6 +100,7 @@ function buildSystemPrompt(memoryFacts) {
     '- Anticipate what he needs based on context',
     '',
     'TOOL USAGE RULES — ABSOLUTE, NO EXCEPTIONS:',
+    'CRITICAL: You MUST call the actual tool. Never say you sent a message, created a task, or did anything without calling the tool first. If you cannot call a tool, say you cannot — never pretend you did.',
     '- You MUST call tools to perform actions. NEVER just say you did something — actually do it by calling the tool.',
     '- If Rabih says "send", "message", "call", "email", "schedule", "add", "delete", "create" — you MUST call the corresponding tool. No exceptions.',
     '- NEVER say "I sent the message" or "Done" unless you actually called send_whatsapp_message or send_email and the tool returned success.',
@@ -372,7 +373,7 @@ function requiresToolAction(text) {
   return false;
 }
 
-async function runToolLoop(history, memoryFacts, systemOverride, forceModel) {
+async function runToolLoop(history, memoryFacts, systemOverride, forceModel, _isRetry) {
   let response = await callClaude(history, memoryFacts, systemOverride, forceModel);
   let rounds = 0;
   let usedTools = false;
@@ -393,11 +394,11 @@ async function runToolLoop(history, memoryFacts, systemOverride, forceModel) {
   }
 
   // Safety net: if Claude ended without using tools but the request clearly needed action, retry with Sonnet
-  if (!usedTools && response.stop_reason === 'end_turn' && !forceModel) {
+  if (!usedTools && response.stop_reason === 'end_turn' && !_isRetry) {
     var userText = getLatestUserText(history);
     if (requiresToolAction(userText)) {
-      console.log('SAFETY NET: Claude skipped tools on action request, retrying with Sonnet — "' + userText.substring(0, 60) + '"');
-      return await runToolLoop(history, memoryFacts, systemOverride, SONNET_MODEL);
+      console.log('FALLBACK: Claude (' + (forceModel || 'auto') + ') skipped tools on action request, retrying with Sonnet — "' + userText.substring(0, 80) + '"');
+      return await runToolLoop(history, memoryFacts, systemOverride, SONNET_MODEL, true);
     }
   }
 
