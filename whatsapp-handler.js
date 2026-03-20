@@ -12,6 +12,8 @@ let isConnected = false;
 let isProcessing = false;
 let lastConnectedNotify = 0;
 let _reconnect = null;
+let badMacCount = 0;
+let lastBadMacReset = Date.now();
 const sentMessages = new Set();
 const processedMessages = new Set();
 
@@ -116,6 +118,7 @@ async function initWhatsApp(options) {
       if (connection === 'open') {
         isConnected = true;
         currentSock = sock;
+        badMacCount = 0;
         clearQRSent();
         console.log('WhatsApp connected! Auth saved to:', AUTH_FOLDER);
         // Only notify Telegram once per 6 hours to avoid spam on reconnections
@@ -132,8 +135,29 @@ async function initWhatsApp(options) {
       if (connection === 'close') {
         isConnected = false;
         const statusCode = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output && lastDisconnect.error.output.statusCode;
+        const errorMsg = lastDisconnect && lastDisconnect.error && lastDisconnect.error.message || '';
+        const isBadMac = errorMsg.includes('Bad MAC') || errorMsg.includes('bad mac');
+        console.log('WhatsApp disconnected, code:', statusCode, 'error:', errorMsg, 'reconnecting:', statusCode !== DisconnectReason.loggedOut);
+
+        // Handle Bad MAC errors — corrupted session, needs fresh auth
+        if (isBadMac) {
+          badMacCount++;
+          console.error('Bad MAC error #' + badMacCount + ' — session corrupted');
+          if (badMacCount >= 3) {
+            console.log('Too many Bad MAC errors — clearing auth and requesting new QR');
+            badMacCount = 0;
+            try { fs.rmSync(AUTH_FOLDER, { recursive: true, force: true }); } catch(e) {}
+            clearQRSent();
+            await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
+              chat_id: rabihChatId,
+              text: 'WhatsApp session corrupted (Bad MAC). Cleared auth — a new QR code will be sent shortly. Please scan it.'
+            }).catch(function() {});
+            setTimeout(connect, 3000);
+            return;
+          }
+        }
+
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-        console.log('WhatsApp disconnected, code:', statusCode, 'reconnecting:', shouldReconnect);
         if (shouldReconnect) {
           setTimeout(connect, 5000);
         } else {
@@ -146,6 +170,24 @@ async function initWhatsApp(options) {
             chat_id: rabihChatId,
             text: 'WhatsApp logged out. Send /wa_qr to get a new QR code.'
           }).catch(function() {});
+        }
+      }
+    });
+
+    // Catch session/crypto errors that don't trigger connection close
+    sock.ev.on('error', function(err) {
+      var errStr = (err && err.message) || String(err);
+      if (errStr.includes('Bad MAC') || errStr.includes('bad mac')) {
+        badMacCount++;
+        console.error('Socket error Bad MAC #' + badMacCount);
+        if (badMacCount >= 3) {
+          console.log('Forcing session reset due to repeated Bad MAC');
+          forceNewQR();
+          axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
+            chat_id: rabihChatId,
+            text: 'WhatsApp session corrupted (repeated Bad MAC errors). Clearing session — new QR coming.'
+          }).catch(function() {});
+          badMacCount = 0;
         }
       }
     });
