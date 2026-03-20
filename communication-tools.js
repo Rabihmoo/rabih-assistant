@@ -37,6 +37,34 @@ async function sendWhatsAppMessage(phoneNumber, message) {
   }
 }
 
+async function listWhatsAppGroups() {
+  if (!_socket) return { error: 'WhatsApp not connected. Please scan the QR code first.' };
+  try {
+    var groups = await _socket.groupFetchAllParticipating();
+    var list = Object.values(groups).map(function(g) {
+      return { name: g.subject, jid: g.id, participants: (g.participants || []).length };
+    });
+    list.sort(function(a, b) { return a.name.localeCompare(b.name); });
+    return { count: list.length, groups: list };
+  } catch (err) {
+    console.error('List groups error:', err.message);
+    return { error: 'Failed to list groups: ' + err.message };
+  }
+}
+
+async function sendWhatsAppGroup(groupJid, message) {
+  if (!_socket) return { error: 'WhatsApp not connected. Please scan the QR code first.' };
+  try {
+    var jid = groupJid.endsWith('@g.us') ? groupJid : groupJid + '@g.us';
+    await _socket.sendMessage(jid, { text: message });
+    console.log('WhatsApp group message sent to', jid, ':', message.substring(0, 80));
+    return { success: true, sent_to: jid, message: message };
+  } catch (err) {
+    console.error('WhatsApp group send error:', err.message);
+    return { error: 'Failed to send to group: ' + err.message };
+  }
+}
+
 async function makePhoneCall(phoneNumber, message, language) {
   const apiKey = process.env.AT_API_KEY;
   const username = process.env.AT_USERNAME;
@@ -79,6 +107,27 @@ const communicationTools = [
     }
   },
   {
+    name: 'list_whatsapp_groups',
+    description: 'List all WhatsApp groups the bot is part of. Returns group names and JIDs. Use when Rabih asks about his groups, which groups, or before sending a group message.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'send_whatsapp_group',
+    description: 'Send a message to a WhatsApp group by its JID. Use list_whatsapp_groups first to get the JID. Use when Rabih says send to the group, message the team group, notify the staff group.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        group_jid: { type: 'string', description: 'Group JID ending in @g.us. Get it from list_whatsapp_groups.' },
+        message: { type: 'string', description: 'The message to send to the group.' }
+      },
+      required: ['group_jid', 'message']
+    }
+  },
+  {
     name: 'make_phone_call',
     description: "Make a real phone call via Africa's Talking. Works in Mozambique and Lebanon.",
     input_schema: {
@@ -97,6 +146,8 @@ async function handleCommunicationTool(toolName, toolInput) {
   try {
     switch (toolName) {
       case 'send_whatsapp_message': return await sendWhatsAppMessage(toolInput.phone_number, toolInput.message);
+      case 'list_whatsapp_groups': return await listWhatsAppGroups();
+      case 'send_whatsapp_group': return await sendWhatsAppGroup(toolInput.group_jid, toolInput.message);
       case 'make_phone_call': return await makePhoneCall(toolInput.phone_number, toolInput.message, toolInput.language || 'english');
       default: return { error: 'Unknown tool: ' + toolName };
     }

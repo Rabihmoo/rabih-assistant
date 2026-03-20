@@ -224,7 +224,7 @@ async function executeTool(toolName, toolInput) {
     if (['search_drive', 'list_drive_files', 'delete_drive_file', 'rename_drive_file'].includes(toolName)) return await handleDriveTool(toolName, toolInput);
     if (['log_expense', 'get_expense_summary'].includes(toolName)) return await handleExpenseTool(toolName, toolInput);
     if (['set_reminder', 'add_supplier', 'find_supplier'].includes(toolName)) return await handleReminderTool(toolName, toolInput);
-    if (['send_whatsapp_message', 'make_phone_call'].includes(toolName)) return await handleCommunicationTool(toolName, toolInput);
+    if (['send_whatsapp_message', 'list_whatsapp_groups', 'send_whatsapp_group', 'make_phone_call'].includes(toolName)) return await handleCommunicationTool(toolName, toolInput);
     if (['add_contact', 'find_contact', 'list_contacts'].includes(toolName)) return await handleContactTool(toolName, toolInput);
     if (['add_task', 'list_tasks', 'complete_task', 'delete_task'].includes(toolName)) return await handleTaskTool(toolName, toolInput);
     if (['schedule_action', 'list_scheduled', 'cancel_scheduled'].includes(toolName)) return await handleSchedulerTool(toolName, toolInput);
