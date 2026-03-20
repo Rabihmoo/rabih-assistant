@@ -99,8 +99,11 @@ function buildSystemPrompt(memoryFacts) {
     '- Remember everything, never ask him to repeat himself',
     '- Anticipate what he needs based on context',
     '',
-    'TOOL USAGE RULES:',
-    '- ALWAYS use tools to complete requests - NEVER skip a tool call',
+    'TOOL USAGE RULES — ABSOLUTE, NO EXCEPTIONS:',
+    '- You MUST call tools to perform actions. NEVER just say you did something — actually do it by calling the tool.',
+    '- If Rabih says "send", "message", "call", "email", "schedule", "add", "delete", "create" — you MUST call the corresponding tool. No exceptions.',
+    '- NEVER say "I sent the message" or "Done" unless you actually called send_whatsapp_message or send_email and the tool returned success.',
+    '- If you need a contact number, call find_contact FIRST, then call the send tool. Do NOT skip either step.',
     '- NEVER confirm success unless the tool returned success:true or a valid result',
     '- If a tool fails, tell Rabih exactly what failed',
     '- You have FULL authority over Gmail, Calendar, Drive, WhatsApp, and all tools',
@@ -357,11 +360,25 @@ async function callClaude(messages, memoryFacts, systemOverride, forceModel) {
 
 // ========================= TOOL LOOP =========================
 
+// Detect if a user message requires a tool action
+var ACTION_WORDS = ['send', 'message', 'call', 'email', 'schedule', 'remind', 'add task', 'delete', 'create', 'log expense', 'log invoice', 'mark paid', 'whatsapp'];
+
+function requiresToolAction(text) {
+  if (!text || typeof text !== 'string') return false;
+  var lower = text.toLowerCase();
+  for (var i = 0; i < ACTION_WORDS.length; i++) {
+    if (lower.includes(ACTION_WORDS[i])) return true;
+  }
+  return false;
+}
+
 async function runToolLoop(history, memoryFacts, systemOverride, forceModel) {
   let response = await callClaude(history, memoryFacts, systemOverride, forceModel);
   let rounds = 0;
+  let usedTools = false;
   while (response.stop_reason === 'tool_use' && rounds < 5) {
     rounds++;
+    usedTools = true;
     const toolUseBlocks = response.content.filter(function(b) { return b.type === 'tool_use'; });
     if (!toolUseBlocks.length) break;
     history.push({ role: 'assistant', content: response.content });
@@ -374,6 +391,16 @@ async function runToolLoop(history, memoryFacts, systemOverride, forceModel) {
     history.push({ role: 'user', content: toolResults });
     response = await callClaude(history, memoryFacts, systemOverride, forceModel);
   }
+
+  // Safety net: if Claude ended without using tools but the request clearly needed action, retry with Sonnet
+  if (!usedTools && response.stop_reason === 'end_turn' && !forceModel) {
+    var userText = getLatestUserText(history);
+    if (requiresToolAction(userText)) {
+      console.log('SAFETY NET: Claude skipped tools on action request, retrying with Sonnet — "' + userText.substring(0, 60) + '"');
+      return await runToolLoop(history, memoryFacts, systemOverride, SONNET_MODEL);
+    }
+  }
+
   return response;
 }
 
