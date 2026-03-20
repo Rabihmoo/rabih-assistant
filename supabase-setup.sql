@@ -63,9 +63,55 @@ CREATE TABLE IF NOT EXISTS whatsapp_logs (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Checklists — templates (what to send, when, to whom)
+CREATE TABLE IF NOT EXISTS checklists (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  business TEXT NOT NULL,
+  type TEXT NOT NULL,
+  items JSONB NOT NULL DEFAULT '[]',
+  send_time TEXT NOT NULL,
+  manager_number TEXT NOT NULL,
+  frequency TEXT DEFAULT 'daily',
+  active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Checklist sends — daily records of checklists that were sent
+CREATE TABLE IF NOT EXISTS checklist_sends (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  checklist_id UUID REFERENCES checklists(id),
+  manager_number TEXT NOT NULL,
+  business TEXT NOT NULL,
+  type TEXT NOT NULL,
+  items JSONB DEFAULT '[]',
+  status TEXT DEFAULT 'sent',
+  sent_at TIMESTAMPTZ DEFAULT NOW(),
+  completed_at TIMESTAMPTZ,
+  followup_sent BOOLEAN DEFAULT FALSE,
+  escalated BOOLEAN DEFAULT FALSE
+);
+
+-- Checklist responses — manager replies
+CREATE TABLE IF NOT EXISTS checklist_responses (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  checklist_id UUID REFERENCES checklists(id),
+  send_id UUID REFERENCES checklist_sends(id),
+  responder_number TEXT NOT NULL,
+  business TEXT DEFAULT '',
+  type TEXT DEFAULT '',
+  response TEXT NOT NULL,
+  photo_url TEXT,
+  status TEXT DEFAULT 'received',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts USING btree (name);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_run_at ON scheduled_tasks USING btree (run_at) WHERE done = false;
 CREATE INDEX IF NOT EXISTS idx_tasks_done ON tasks USING btree (done);
 CREATE INDEX IF NOT EXISTS idx_invoices_paid ON invoices USING btree (paid);
 CREATE INDEX IF NOT EXISTS idx_whatsapp_logs_created ON whatsapp_logs USING btree (created_at);
+CREATE INDEX IF NOT EXISTS idx_checklists_active ON checklists USING btree (active) WHERE active = true;
+CREATE INDEX IF NOT EXISTS idx_checklist_sends_status ON checklist_sends USING btree (status, sent_at);
+CREATE INDEX IF NOT EXISTS idx_checklist_sends_date ON checklist_sends USING btree (sent_at);
+CREATE INDEX IF NOT EXISTS idx_checklist_responses_send ON checklist_responses USING btree (send_id);

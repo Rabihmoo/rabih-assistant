@@ -17,6 +17,7 @@ const { invoiceTools, handleInvoiceTool, getOverdueInvoices } = require('./invoi
 const { locationTools, handleLocationTool } = require('./location-tools');
 const { newsTools, handleNewsTool } = require('./news-tools');
 const { transcribeAudio } = require('./voice-handler');
+const { checklistTools, handleChecklistTool, initChecklists, processChecklistResponse } = require('./checklist-manager');
 const { initWhatsApp, forceNewQR } = require('./whatsapp-handler');
 
 const app = express();
@@ -130,6 +131,13 @@ function buildSystemPrompt(memoryFacts) {
     '- When he asks "what do I need to do", "my tasks" — use list_tasks',
     '- When he says "done with X", "finished X" — use complete_task',
     '',
+    'CHECKLIST RULES:',
+    '- Use create_checklist to set up daily checklists for BBQ House, SALT, Central Kitchen, Executive Cleaning',
+    '- Each checklist needs: business name, type (opening/closing/cleaning/inventory/safety), items array, send time, manager WhatsApp number',
+    '- Checklists auto-send via WhatsApp at scheduled times, auto-follow-up at 30 min, escalate to Rabih at 1 hour',
+    '- Use get_checklist_status or get_daily_checklist_report to see completion across all businesses',
+    '- Use list_checklists to see all active checklists',
+    '',
     'DATA RULES:',
     '- NEVER invent or fabricate any data',
     '- Only report what tools actually returned',
@@ -160,7 +168,7 @@ const TOOLS = [
   ...calendarTools, ...gmailTools, ...driveTools, ...filesTools,
   ...expenseTools, ...reminderTools, ...communicationTools,
   ...contactsTools, ...taskTools, ...schedulerTools,
-  ...invoiceTools, ...locationTools, ...newsTools,
+  ...invoiceTools, ...locationTools, ...newsTools, ...checklistTools,
   { type: 'web_search_20250305', name: 'web_search' }
 ];
 
@@ -214,6 +222,7 @@ async function executeTool(toolName, toolInput) {
     if (['log_invoice', 'list_unpaid_invoices', 'mark_invoice_paid'].includes(toolName)) return await handleInvoiceTool(toolName, toolInput);
     if (['search_places', 'get_directions'].includes(toolName)) return await handleLocationTool(toolName, toolInput);
     if (['get_news', 'get_exchange_rate'].includes(toolName)) return await handleNewsTool(toolName, toolInput);
+    if (['create_checklist', 'list_checklists', 'update_checklist', 'delete_checklist', 'get_checklist_status', 'get_daily_checklist_report'].includes(toolName)) return await handleChecklistTool(toolName, toolInput);
     return { error: 'Unknown tool' };
   } catch (e) { console.error('Tool error:', e.message); return { error: e.message }; }
 }
@@ -250,6 +259,7 @@ var SIMPLE_PATTERNS = [
   'create event', 'delete event', 'cancel event',
   'exchange rate', 'usd', 'mzn',
   'search drive', 'open file', 'read file',
+  'checklist', 'create checklist', 'list checklist', 'checklist status',
   '/reset', '/memory', '/tasks', '/wa_'
 ];
 
@@ -592,6 +602,12 @@ initWhatsApp({
   onOtherMessage: async function(text, senderNumber, senderJid) {
     console.log('WhatsApp from other:', senderNumber, text.substring(0, 80));
     try {
+      // Check if this is a checklist response first
+      var isChecklistReply = await processChecklistResponse(senderNumber, text, null);
+      if (isChecklistReply) {
+        return 'Thank you! Your checklist response has been recorded. ✅';
+      }
+
       // Log to Supabase
       var contactInfo = await isApprovedContact(senderNumber);
       var senderName = contactInfo ? contactInfo.name : senderNumber;
@@ -682,13 +698,22 @@ setInterval(function() {
 
 initScheduler(executeTool, sendTelegram, RABIH_CHAT_ID);
 
+// Init checklist system with WhatsApp send function
+initChecklists(
+  async function(phone, message) {
+    return await handleCommunicationTool('send_whatsapp_message', { phone_number: phone, message: message });
+  },
+  sendTelegram,
+  RABIH_CHAT_ID
+);
+
 // ========================= SERVER =========================
 
 app.get('/', (req, res) => res.json({
   status: 'Rabih Assistant v5 running',
   tools: TOOLS.length,
   features: ['calendar', 'gmail', 'drive', 'files', 'expenses', 'reminders', 'whatsapp', 'phone',
-             'contacts', 'tasks', 'scheduler', 'invoices', 'location', 'news', 'voice', 'briefings']
+             'contacts', 'tasks', 'scheduler', 'invoices', 'location', 'news', 'voice', 'briefings', 'checklists']
 }));
 
 app.listen(PORT, function() { console.log('Rabih Assistant v5 listening on port ' + PORT); });
