@@ -141,7 +141,12 @@ function buildSystemPrompt(memoryFacts) {
     'DATA RULES:',
     '- NEVER invent or fabricate any data',
     '- Only report what tools actually returned',
-    '- If results are empty, say exactly that'
+    '- If results are empty, say exactly that',
+    '',
+    'NOT BUILT YET:',
+    '- You have NO attendance system, NO stock alert system, NO cleanliness verification system yet. These are planned but not built.',
+    '- If asked about any of these, say clearly that the feature is not built yet.',
+    '- NEVER invent system status, errors, or fake infrastructure. Only report what tools actually returned.'
   ];
   if (memoryFacts && memoryFacts.length > 0) {
     parts.push('');
