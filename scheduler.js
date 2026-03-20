@@ -38,13 +38,17 @@ async function checkAndExecuteDueTasks() {
     try {
       var result = null;
       var payload = typeof task.payload === 'string' ? JSON.parse(task.payload) : task.payload;
+      console.log('Scheduled task payload:', JSON.stringify(payload));
 
       switch (task.type) {
         case 'whatsapp':
-          result = await _executeTool('send_whatsapp_message', { phone_number: payload.phone, message: payload.message });
+          var phone = payload.phone || payload.phone_number || payload.number || payload.to || '';
+          var msg = payload.message || payload.text || payload.body || '';
+          console.log('Scheduler WhatsApp — phone:', phone, 'message:', msg.substring(0, 50));
+          result = await _executeTool('send_whatsapp_message', { phone_number: phone, message: msg });
           break;
         case 'email':
-          result = await _executeTool('send_email', { to: payload.to, subject: payload.subject, body: payload.body });
+          result = await _executeTool('send_email', { to: payload.to || payload.email || '', subject: payload.subject || '', body: payload.body || payload.message || '' });
           break;
         case 'reminder':
           // Just send a Telegram notification

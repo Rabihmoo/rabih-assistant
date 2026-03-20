@@ -8,6 +8,7 @@ function setSocket(sock) {
 }
 
 async function sendWhatsAppMessage(phoneNumber, message) {
+  if (!phoneNumber) return { error: 'phone_number is missing from request payload' };
   if (!_socket) return { error: 'WhatsApp not connected. Please scan the QR code first.' };
   try {
     const cleaned = phoneNumber.replace(/[^0-9]/g, '');
