@@ -231,10 +231,9 @@ async function initWhatsApp(options) {
           try {
             var audioBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: logger, reuploadRequest: sock.updateMediaMessage });
             var isFromRabih = from.includes('258875254847') || from.includes('@lid');
-            var replyTo = isFromRabih ? RABIH_JID : from;
             var response = await onVoiceMessage(audioBuffer, audioMsg.mimetype || 'audio/ogg', from, isFromRabih);
             if (response && currentSock) {
-              var sent = await currentSock.sendMessage(replyTo, { text: response });
+              var sent = await currentSock.sendMessage(from, { text: response });
               if (sent && sent.key && sent.key.id) {
                 sentMessages.add(sent.key.id);
                 processedMessages.add(sent.key.id);
@@ -267,9 +266,9 @@ async function initWhatsApp(options) {
         try {
           if (isFromRabih) {
             // Rabih's own message — full assistant mode
-            var response = await onRabihMessage(text, 'whatsapp', RABIH_JID);
+            var response = await onRabihMessage(text, 'whatsapp', from);
             if (response && currentSock) {
-              var sent = await currentSock.sendMessage(RABIH_JID, { text: response });
+              var sent = await currentSock.sendMessage(from, { text: response });
               if (sent && sent.key && sent.key.id) {
                 sentMessages.add(sent.key.id);
                 processedMessages.add(sent.key.id);
@@ -300,7 +299,7 @@ async function initWhatsApp(options) {
         isProcessing = false;
         console.error('WhatsApp message error:', err.message);
         try {
-          if (currentSock) await currentSock.sendMessage(RABIH_JID, { text: 'Error: ' + err.message });
+          if (currentSock && from) await currentSock.sendMessage(from, { text: 'Error: ' + err.message });
         } catch(e) {}
       }
     });
