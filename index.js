@@ -473,7 +473,9 @@ async function handleMessage(chatId, userText, messageId) {
   }
 
   await sendTyping(chatId);
-  const [history, memoryFacts] = await Promise.all([loadHistory(chatId), loadMemory()]);
+  var [history, memoryFacts] = await Promise.all([loadHistory(chatId), loadMemory()]);
+  // Keep last 20 messages for Telegram (more room than WhatsApp but still bounded)
+  if (history.length > 20) history = history.slice(-20);
   history.push({ role: 'user', content: userText });
 
   const response = await runToolLoop(history, memoryFacts);
@@ -630,12 +632,16 @@ initWhatsApp({
       return null;
     }
     try {
-      const waHistory = await loadHistory('wa_' + from);
-      const waMemory = await loadMemory();
+      var waHistory = await loadHistory('wa_' + from);
+      var waMemory = await loadMemory();
+      // Keep only last 10 messages to prevent model confusion on long histories
+      if (waHistory.length > 10) waHistory = waHistory.slice(-10);
       waHistory.push({ role: 'user', content: text });
-      const response = await runToolLoop(waHistory, waMemory);
-      const waText = response.content.find(function(b) { return b.type === 'text'; });
-      const waReply = waText ? waText.text : 'Done!';
+      // Force Sonnet for action requests — Haiku skips tool calls on long contexts
+      var model = requiresToolAction(text) ? SONNET_MODEL : null;
+      var response = await runToolLoop(waHistory, waMemory, null, model);
+      var waText = response.content.find(function(b) { return b.type === 'text'; });
+      var waReply = waText ? waText.text : 'Done!';
       await saveMessage('wa_' + from, 'user', text);
       await saveMessage('wa_' + from, 'assistant', waReply);
       return waReply;
@@ -712,8 +718,10 @@ initWhatsApp({
         // Process as normal Rabih message
         var waHistory = await loadHistory('wa_258875254847@s.whatsapp.net');
         var waMemory = await loadMemory();
+        if (waHistory.length > 10) waHistory = waHistory.slice(-10);
         waHistory.push({ role: 'user', content: '[Voice message] ' + transcription.text });
-        var response = await runToolLoop(waHistory, waMemory);
+        var voiceModel = requiresToolAction(transcription.text) ? SONNET_MODEL : null;
+        var response = await runToolLoop(waHistory, waMemory, null, voiceModel);
         var reply = response.content.find(function(b) { return b.type === 'text'; });
         var replyText = reply ? reply.text : 'Done!';
         await saveMessage('wa_258875254847@s.whatsapp.net', 'user', '[Voice] ' + transcription.text);
