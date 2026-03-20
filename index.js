@@ -220,6 +220,80 @@ async function executeTool(toolName, toolInput) {
 
 // ========================= CLAUDE =========================
 
+var HAIKU_MODEL = 'claude-haiku-4-5-20251001';
+var SONNET_MODEL = 'claude-sonnet-4-6';
+
+// Keywords that signal a complex request needing Sonnet
+var COMPLEX_PATTERNS = [
+  'summarize', 'summary', 'analyze', 'analysis', 'explain', 'compare',
+  'write a', 'draft a', 'compose', 'create a report', 'write me',
+  'research', 'investigate', 'find out about', 'look into',
+  'review', 'evaluate', 'assess', 'opinion', 'recommend', 'suggest',
+  'plan', 'strategy', 'brainstorm', 'ideas for',
+  'translate', 'rewrite', 'rephrase',
+  'briefing', 'morning brief', 'weekly brief', 'end of day',
+  'what do you think', 'what should i', 'help me decide',
+  'pros and cons', 'advantages', 'disadvantages'
+];
+
+// Keywords that signal a simple command Haiku handles fine
+var SIMPLE_PATTERNS = [
+  'send', 'message', 'whatsapp', 'call', 'email to',
+  'remind me', 'set reminder', 'reminder for',
+  'add task', 'mark done', 'complete task', 'delete task', 'my tasks', 'task list',
+  'add contact', 'find contact', 'save contact', 'save number',
+  'schedule', 'cancel',
+  'log expense', 'spent', 'paid for', 'bought',
+  'log invoice', 'mark paid', 'mark invoice',
+  'what time', 'what day', 'today', 'tomorrow',
+  'list events', 'my calendar', 'my schedule',
+  'create event', 'delete event', 'cancel event',
+  'exchange rate', 'usd', 'mzn',
+  'search drive', 'open file', 'read file',
+  '/reset', '/memory', '/tasks', '/wa_'
+];
+
+function classifyComplexity(text) {
+  if (!text || typeof text !== 'string') return SONNET_MODEL;
+  var lower = text.toLowerCase().trim();
+
+  // Short messages (under 15 words) are almost always simple commands
+  var wordCount = lower.split(/\s+/).length;
+
+  // Check for complex patterns first — these always need Sonnet
+  for (var i = 0; i < COMPLEX_PATTERNS.length; i++) {
+    if (lower.includes(COMPLEX_PATTERNS[i])) {
+      return SONNET_MODEL;
+    }
+  }
+
+  // Check for simple patterns
+  for (var j = 0; j < SIMPLE_PATTERNS.length; j++) {
+    if (lower.includes(SIMPLE_PATTERNS[j])) {
+      return HAIKU_MODEL;
+    }
+  }
+
+  // Short messages default to Haiku, longer ones to Sonnet
+  if (wordCount <= 20) return HAIKU_MODEL;
+  return SONNET_MODEL;
+}
+
+function getLatestUserText(messages) {
+  for (var i = messages.length - 1; i >= 0; i--) {
+    var msg = messages[i];
+    if (msg.role === 'user') {
+      if (typeof msg.content === 'string') return msg.content;
+      if (Array.isArray(msg.content)) {
+        for (var j = 0; j < msg.content.length; j++) {
+          if (msg.content[j].type === 'text') return msg.content[j].text;
+        }
+      }
+    }
+  }
+  return '';
+}
+
 function sanitizeHistory(messages) {
   const clean = [];
   for (let i = 0; i < messages.length; i++) {
@@ -235,14 +309,16 @@ function sanitizeHistory(messages) {
   return clean;
 }
 
-async function callClaude(messages, memoryFacts, systemOverride) {
+async function callClaude(messages, memoryFacts, systemOverride, forceModel) {
   const safeMessages = sanitizeHistory(messages);
-  console.log('Calling Claude with', safeMessages.length, 'messages (raw:', messages.length, ')...');
+  var userText = getLatestUserText(safeMessages);
+  var model = forceModel || classifyComplexity(userText);
+  console.log('Calling Claude [' + (model === HAIKU_MODEL ? 'HAIKU' : 'SONNET') + '] with', safeMessages.length, 'messages — "' + userText.substring(0, 60) + '"');
   try {
     const res = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
-        model: 'claude-sonnet-4-6',
+        model: model,
         max_tokens: 4096,
         system: systemOverride || buildSystemPrompt(memoryFacts || []),
         tools: TOOLS,
@@ -250,7 +326,7 @@ async function callClaude(messages, memoryFacts, systemOverride) {
       },
       { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 60000 }
     );
-    console.log('Claude stop_reason:', res.data.stop_reason);
+    console.log('Claude stop_reason:', res.data.stop_reason, '[' + model.split('-')[1] + ']');
     return res.data;
   } catch (err) {
     if (err.response) {
@@ -262,8 +338,8 @@ async function callClaude(messages, memoryFacts, systemOverride) {
 
 // ========================= TOOL LOOP =========================
 
-async function runToolLoop(history, memoryFacts, systemOverride) {
-  let response = await callClaude(history, memoryFacts, systemOverride);
+async function runToolLoop(history, memoryFacts, systemOverride, forceModel) {
+  let response = await callClaude(history, memoryFacts, systemOverride, forceModel);
   let rounds = 0;
   while (response.stop_reason === 'tool_use' && rounds < 5) {
     rounds++;
@@ -277,7 +353,7 @@ async function runToolLoop(history, memoryFacts, systemOverride) {
       toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
     }
     history.push({ role: 'user', content: toolResults });
-    response = await callClaude(history, memoryFacts, systemOverride);
+    response = await callClaude(history, memoryFacts, systemOverride, forceModel);
   }
   return response;
 }
@@ -434,7 +510,7 @@ cron.schedule('0 5 * * *', async function() {
   try {
     const memoryFacts = await loadMemory();
     const history = [{ role: 'user', content: 'Good morning! Give me my morning briefing:\n1) Calendar events for today and tomorrow\n2) Unread important emails from the last 12 hours\n3) Any pending high-priority tasks\n4) USD/MZN exchange rate\n5) Overdue invoices if any\nBe concise and direct.' }];
-    const response = await runToolLoop(history, memoryFacts);
+    const response = await runToolLoop(history, memoryFacts, null, SONNET_MODEL);
     const textBlock = response.content.find(function(b) { return b.type === 'text'; });
     await sendTelegram(RABIH_CHAT_ID, 'Good morning Rabih!\n\n' + (textBlock ? textBlock.text : 'Could not generate briefing.'));
   } catch (err) { console.error('Morning briefing error:', err.message); }
@@ -446,7 +522,7 @@ cron.schedule('0 19 * * *', async function() {
   try {
     const memoryFacts = await loadMemory();
     const history = [{ role: 'user', content: 'End of day summary:\n1) Expenses logged today\n2) Tasks completed today and still pending\n3) Any unread important emails\n4) Reminders and calendar events for tomorrow\n5) Overdue invoices\nBe concise.' }];
-    const response = await runToolLoop(history, memoryFacts);
+    const response = await runToolLoop(history, memoryFacts, null, SONNET_MODEL);
     const textBlock = response.content.find(function(b) { return b.type === 'text'; });
     await sendTelegram(RABIH_CHAT_ID, 'Evening Summary\n\n' + (textBlock ? textBlock.text : 'Could not generate summary.'));
   } catch (err) { console.error('Evening summary error:', err.message); }
@@ -458,7 +534,7 @@ cron.schedule('15 5 * * 1', async function() {
   try {
     const memoryFacts = await loadMemory();
     const history = [{ role: 'user', content: 'Weekly Monday briefing:\n1) Calendar overview for this entire week\n2) All pending tasks by priority\n3) Unpaid invoices and total amounts\n4) Expense summary for last week\n5) Any overdue items\nBe thorough but organized.' }];
-    const response = await runToolLoop(history, memoryFacts);
+    const response = await runToolLoop(history, memoryFacts, null, SONNET_MODEL);
     const textBlock = response.content.find(function(b) { return b.type === 'text'; });
     await sendTelegram(RABIH_CHAT_ID, 'Weekly Briefing — Monday\n\n' + (textBlock ? textBlock.text : 'Could not generate briefing.'));
   } catch (err) { console.error('Weekly briefing error:', err.message); }
@@ -533,7 +609,7 @@ initWhatsApp({
       if (contactInfo && ['staff', 'business', 'supplier'].includes(contactInfo.category)) {
         var staffHistory = [{ role: 'user', content: text }];
         var staffSystem = buildStaffPrompt(contactInfo.name, contactInfo.category);
-        var response = await callClaude(staffHistory, null, staffSystem);
+        var response = await callClaude(staffHistory, null, staffSystem, HAIKU_MODEL);
         var reply = response.content.find(function(b) { return b.type === 'text'; });
         if (reply) {
           await supabase.from('whatsapp_logs').insert({
