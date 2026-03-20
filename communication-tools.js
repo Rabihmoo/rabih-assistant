@@ -29,9 +29,13 @@ async function sendWhatsAppMessage(phoneNumber, message) {
       return { error: 'Number ' + phoneNumber + ' is not registered on WhatsApp.' };
     }
 
-    await _socket.sendMessage(jid, { text: message });
-    console.log('WhatsApp sent to', jid, ':', message);
-    return { success: true, sent_to: phoneNumber, message: message };
+    var sent = await _socket.sendMessage(jid, { text: message });
+    if (!sent || !sent.key || !sent.key.id) {
+      console.error('WhatsApp send returned no message ID for', jid);
+      return { error: 'Message to ' + phoneNumber + ' was not confirmed by WhatsApp. It may not have been delivered.' };
+    }
+    console.log('WhatsApp sent to', jid, '(id:', sent.key.id, '):', message);
+    return { success: true, sent_to: phoneNumber, message_id: sent.key.id, message: message };
   } catch (err) {
     console.error('WhatsApp send error:', err.message);
     return { error: 'Failed to send WhatsApp to ' + phoneNumber + ': ' + (err.message || 'Unknown error') };
@@ -57,9 +61,13 @@ async function sendWhatsAppGroup(groupJid, message) {
   if (!_socket) return { error: 'WhatsApp not connected. Please scan the QR code first.' };
   try {
     var jid = groupJid.endsWith('@g.us') ? groupJid : groupJid + '@g.us';
-    await _socket.sendMessage(jid, { text: message });
-    console.log('WhatsApp group message sent to', jid, ':', message.substring(0, 80));
-    return { success: true, sent_to: jid, message: message };
+    var sent = await _socket.sendMessage(jid, { text: message });
+    if (!sent || !sent.key || !sent.key.id) {
+      console.error('WhatsApp group send returned no message ID for', jid);
+      return { error: 'Group message was not confirmed by WhatsApp. It may not have been delivered.' };
+    }
+    console.log('WhatsApp group message sent to', jid, '(id:', sent.key.id, '):', message.substring(0, 80));
+    return { success: true, sent_to: jid, message_id: sent.key.id, message: message };
   } catch (err) {
     console.error('WhatsApp group send error:', err.message);
     return { error: 'Failed to send to group: ' + err.message };
