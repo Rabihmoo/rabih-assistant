@@ -53,7 +53,7 @@ async function initWhatsApp(options) {
   const onRabihMessage = options.onRabihMessage;
   const onOtherMessage = options.onOtherMessage;
   const onVoiceMessage = options.onVoiceMessage;
-  const RABIH_JID = '258855254847@s.whatsapp.net';
+  const RABIH_JID = '258875254847@s.whatsapp.net';
 
   async function connect() {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
@@ -173,7 +173,7 @@ async function initWhatsApp(options) {
           isProcessing = true;
           try {
             var audioBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: logger, reuploadRequest: sock.updateMediaMessage });
-            var isFromRabih = from.includes('258855254847') || from.includes('@lid');
+            var isFromRabih = from.includes('258875254847') || from.includes('@lid');
             var replyTo = isFromRabih ? RABIH_JID : from;
             var response = await onVoiceMessage(audioBuffer, audioMsg.mimetype || 'audio/ogg', from, isFromRabih);
             if (response && currentSock) {
@@ -203,7 +203,7 @@ async function initWhatsApp(options) {
           return;
         }
 
-        var isFromRabih = from.includes('258855254847') || from.includes('@lid');
+        var isFromRabih = from.includes('258875254847') || from.includes('@lid');
         console.log('WhatsApp message from ' + from + ' (rabih:' + isFromRabih + '): ' + text.substring(0, 80));
 
         isProcessing = true;

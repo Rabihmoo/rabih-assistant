@@ -667,14 +667,14 @@ initWhatsApp({
       if (isFromRabih) {
         if (!waEnabled) return null;
         // Process as normal Rabih message
-        var waHistory = await loadHistory('wa_258855254847@s.whatsapp.net');
+        var waHistory = await loadHistory('wa_258875254847@s.whatsapp.net');
         var waMemory = await loadMemory();
         waHistory.push({ role: 'user', content: '[Voice message] ' + transcription.text });
         var response = await runToolLoop(waHistory, waMemory);
         var reply = response.content.find(function(b) { return b.type === 'text'; });
         var replyText = reply ? reply.text : 'Done!';
-        await saveMessage('wa_258855254847@s.whatsapp.net', 'user', '[Voice] ' + transcription.text);
-        await saveMessage('wa_258855254847@s.whatsapp.net', 'assistant', replyText);
+        await saveMessage('wa_258875254847@s.whatsapp.net', 'user', '[Voice] ' + transcription.text);
+        await saveMessage('wa_258875254847@s.whatsapp.net', 'assistant', replyText);
         return replyText;
       } else {
         // Voice from others — transcribe, log, notify
