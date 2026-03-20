@@ -11,6 +11,7 @@ let qrSent = false;
 let isConnected = false;
 let isProcessing = false;
 let lastConnectedNotify = 0;
+let _reconnect = null;
 const sentMessages = new Set();
 const processedMessages = new Set();
 
@@ -38,7 +39,20 @@ function clearQRSent() {
 
 function forceNewQR() {
   clearQRSent();
-  console.log('QR flag cleared - next QR event will be sent to Telegram');
+  // Also clear old auth session so Baileys requests a fresh QR
+  try {
+    fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
+    console.log('Auth folder cleared + QR flag cleared — will reconnect fresh');
+  } catch(e) {
+    console.log('QR flag cleared (auth folder clear failed:', e.message, ')');
+  }
+  // Force disconnect and reconnect
+  if (currentSock) {
+    try { currentSock.end(); } catch(e) {}
+    currentSock = null;
+  }
+  // Trigger fresh connection after a short delay
+  if (_reconnect) setTimeout(_reconnect, 3000);
 }
 
 function getWhatsAppSocket() {
@@ -56,6 +70,7 @@ async function initWhatsApp(options) {
   const RABIH_JID = '258875254847@s.whatsapp.net';
 
   async function connect() {
+    _reconnect = connect;
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
     const { version } = await fetchLatestBaileysVersion();
 
