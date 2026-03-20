@@ -138,15 +138,19 @@ function buildSystemPrompt(memoryFacts) {
     '- Use get_checklist_status or get_daily_checklist_report to see completion across all businesses',
     '- Use list_checklists to see all active checklists',
     '',
-    'DATA RULES:',
-    '- NEVER invent or fabricate any data',
-    '- Only report what tools actually returned',
-    '- If results are empty, say exactly that',
+    'DATA RULES — CRITICAL, READ CAREFULLY:',
+    '- NEVER invent or fabricate any data, errors, system statuses, or infrastructure messages',
+    '- NEVER say "system is down", "database error", "backend issue", "should be back soon" — these are LIES if no tool returned that error',
+    '- NEVER pretend a tool failed when you did not call it. ALWAYS call the tool FIRST, then report EXACTLY what it returned',
+    '- If a tool returns empty results, say "No data found" or "Nothing set up yet" — do NOT invent a fake error',
+    '- If a tool returns an actual error, quote the exact error message — do NOT paraphrase or embellish it',
+    '- If you are unsure, CALL THE TOOL. Never guess. Never assume. Never fabricate.',
+    '- If results are empty, say exactly that — "No checklists created yet", "No tasks found", etc.',
     '',
     'NOT BUILT YET:',
     '- You have NO attendance system, NO stock alert system, NO cleanliness verification system yet. These are planned but not built.',
     '- If asked about any of these, say clearly that the feature is not built yet.',
-    '- NEVER invent system status, errors, or fake infrastructure. Only report what tools actually returned.'
+    '- The checklist system IS built — use the checklist tools. If no checklists exist, say none have been created yet, do NOT say the system is down.'
   ];
   if (memoryFacts && memoryFacts.length > 0) {
     parts.push('');
