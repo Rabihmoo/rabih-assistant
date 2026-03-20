@@ -163,15 +163,41 @@ async function executeTool(toolName, toolInput) {
   } catch (e) { console.error('Tool error:', e.message); return { error: e.message }; }
 }
 
+function sanitizeHistory(messages) {
+  const clean = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg || !msg.role || (!msg.content && msg.content !== '')) continue;
+    if (clean.length > 0 && clean[clean.length - 1].role === msg.role) {
+      // Consecutive same role — keep the latest one for user, skip for assistant
+      if (msg.role === 'user') clean[clean.length - 1] = msg;
+      continue;
+    }
+    clean.push(msg);
+  }
+  // Must start with user
+  while (clean.length > 0 && clean[0].role !== 'user') clean.shift();
+  // Must end properly — if last is assistant and we're about to add user, that's fine
+  return clean;
+}
+
 async function callClaude(messages, memoryFacts) {
-  console.log('Calling Claude with', messages.length, 'messages...');
-  const res = await axios.post(
-    'https://api.anthropic.com/v1/messages',
-    { model: 'claude-sonnet-4-6', max_tokens: 4096, system: buildSystemPrompt(memoryFacts || []), tools: TOOLS, messages: messages },
-    { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 60000 }
-  );
-  console.log('Claude stop_reason:', res.data.stop_reason);
-  return res.data;
+  const safeMessages = sanitizeHistory(messages);
+  console.log('Calling Claude with', safeMessages.length, 'messages (raw:', messages.length, ')...');
+  try {
+    const res = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      { model: 'claude-sonnet-4-6', max_tokens: 4096, system: buildSystemPrompt(memoryFacts || []), tools: TOOLS, messages: safeMessages },
+      { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 60000 }
+    );
+    console.log('Claude stop_reason:', res.data.stop_reason);
+    return res.data;
+  } catch (err) {
+    if (err.response) {
+      console.error('Claude API ERROR', err.response.status, JSON.stringify(err.response.data).substring(0, 500));
+    }
+    throw err;
+  }
 }
 
 async function handleMessage(chatId, userText, messageId) {
@@ -335,30 +361,42 @@ initWhatsApp(TELEGRAM_TOKEN, RABIH_CHAT_ID, async function(text, source, from) {
     console.log('WhatsApp auto-reply is OFF - ignoring: ' + text.substring(0, 50));
     return null;
   }
-  const waHistory = await loadHistory('wa_' + from);
-  const waMemory = await loadMemory();
-  waHistory.push({ role: 'user', content: text });
-  let waResponse = await callClaude(waHistory, waMemory);
-  let waRounds = 0;
-  while (waResponse.stop_reason === 'tool_use' && waRounds < 5) {
-    waRounds++;
-    const waToolBlocks = waResponse.content.filter(function(b) { return b.type === 'tool_use'; });
-    if (!waToolBlocks.length) break;
-    waHistory.push({ role: 'assistant', content: waResponse.content });
-    const waResults = [];
-    for (let i = 0; i < waToolBlocks.length; i++) {
-      const t = waToolBlocks[i];
-      const r = await executeTool(t.name, t.input);
-      waResults.push({ type: 'tool_result', tool_use_id: t.id, content: JSON.stringify(r) });
+  try {
+    const waHistory = await loadHistory('wa_' + from);
+    const waMemory = await loadMemory();
+    waHistory.push({ role: 'user', content: text });
+    let waResponse = await callClaude(waHistory, waMemory);
+    let waRounds = 0;
+    while (waResponse.stop_reason === 'tool_use' && waRounds < 5) {
+      waRounds++;
+      const waToolBlocks = waResponse.content.filter(function(b) { return b.type === 'tool_use'; });
+      if (!waToolBlocks.length) break;
+      waHistory.push({ role: 'assistant', content: waResponse.content });
+      const waResults = [];
+      for (let i = 0; i < waToolBlocks.length; i++) {
+        const t = waToolBlocks[i];
+        const r = await executeTool(t.name, t.input);
+        waResults.push({ type: 'tool_result', tool_use_id: t.id, content: JSON.stringify(r) });
+      }
+      waHistory.push({ role: 'user', content: waResults });
+      waResponse = await callClaude(waHistory, waMemory);
     }
-    waHistory.push({ role: 'user', content: waResults });
-    waResponse = await callClaude(waHistory, waMemory);
+    const waText = waResponse.content.find(function(b) { return b.type === 'text'; });
+    const waReply = waText ? waText.text : 'Done!';
+    await saveMessage('wa_' + from, 'user', text);
+    await saveMessage('wa_' + from, 'assistant', waReply);
+    return waReply;
+  } catch (err) {
+    const errDetail = (err.response && err.response.data) ? JSON.stringify(err.response.data).substring(0, 300) : err.message;
+    console.error('WhatsApp Claude error:', errDetail);
+    // If 400 error, history is likely corrupted — clear it
+    if (err.response && err.response.status === 400) {
+      console.error('Clearing corrupted WhatsApp history for wa_' + from);
+      await supabase.from('assistant_messages').delete().eq('chat_id', 'wa_' + from);
+      return 'Had a memory issue — cleared my WhatsApp history. Please send your message again.';
+    }
+    return 'Error: ' + err.message;
   }
-  const waText = waResponse.content.find(function(b) { return b.type === 'text'; });
-  const waReply = waText ? waText.text : 'Done!';
-  await saveMessage('wa_' + from, 'user', text);
-  await saveMessage('wa_' + from, 'assistant', waReply);
-  return waReply;
 });
 
 setInterval(function() {

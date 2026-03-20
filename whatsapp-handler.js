@@ -9,6 +9,8 @@ const fs = require('fs');
 let currentSock = null;
 let qrSent = false;
 let isConnected = false;
+let isProcessing = false;
+let lastConnectedNotify = 0;
 const sentMessages = new Set();
 const processedMessages = new Set();
 
@@ -95,10 +97,15 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
         currentSock = sock;
         clearQRSent();
         console.log('WhatsApp connected! Auth saved to:', AUTH_FOLDER);
-        await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
-          chat_id: rabihChatId,
-          text: 'WhatsApp connected and session saved. You will not need to scan again unless you log out.'
-        }).catch(function() {});
+        // Only notify Telegram once per 6 hours to avoid spam on reconnections
+        const now = Date.now();
+        if (now - lastConnectedNotify > 6 * 60 * 60 * 1000) {
+          lastConnectedNotify = now;
+          await axios.post('https://api.telegram.org/bot' + telegramToken + '/sendMessage', {
+            chat_id: rabihChatId,
+            text: 'WhatsApp connected and session saved. You will not need to scan again unless you log out.'
+          }).catch(function() {});
+        }
       }
 
       if (connection === 'close') {
@@ -160,20 +167,35 @@ async function initWhatsApp(telegramToken, rabihChatId, onMessage) {
           return;
         }
 
+        // Prevent processing while bot is already generating a reply (race condition fix)
+        if (isProcessing) {
+          console.log('Skipping message — already processing another:', text.substring(0, 50));
+          return;
+        }
+
         console.log('WhatsApp message from ' + from + ' (fromMe:' + msg.key.fromMe + '): ' + text);
 
-        const response = await onMessage(text, 'whatsapp', RABIH_JID);
-        console.log('WhatsApp reply ready:', response ? response.substring(0, 80) : 'null - suppressed');
+        isProcessing = true;
+        try {
+          const response = await onMessage(text, 'whatsapp', RABIH_JID);
+          console.log('WhatsApp reply ready:', response ? response.substring(0, 80) : 'null - suppressed');
 
-        if (response && currentSock) {
-          const sent = await currentSock.sendMessage(RABIH_JID, { text: response });
-          if (sent && sent.key && sent.key.id) {
-            sentMessages.add(sent.key.id);
-            setTimeout(function() { sentMessages.delete(sent.key.id); }, 30000);
+          if (response && currentSock) {
+            // Pre-register message to sentMessages to prevent race condition
+            const sent = await currentSock.sendMessage(RABIH_JID, { text: response });
+            if (sent && sent.key && sent.key.id) {
+              sentMessages.add(sent.key.id);
+              processedMessages.add(sent.key.id);
+              setTimeout(function() { sentMessages.delete(sent.key.id); }, 60000);
+              setTimeout(function() { processedMessages.delete(sent.key.id); }, 60000);
+            }
+            console.log('WhatsApp reply sent OK');
           }
-          console.log('WhatsApp reply sent OK');
+        } finally {
+          isProcessing = false;
         }
       } catch (err) {
+        isProcessing = false;
         console.error('WhatsApp message error:', err.message);
         try {
           if (currentSock) await currentSock.sendMessage('258855254847@s.whatsapp.net', { text: 'Error: ' + err.message });
