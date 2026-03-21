@@ -1011,7 +1011,7 @@ const API_BASE = 'https://rabih-assistant-production.up.railway.app';
 // ============================================================
 // SUPABASE INIT
 // ============================================================
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ============================================================
 // STATE
@@ -1176,7 +1176,7 @@ async function loadDashboardStats() {
 
 async function loadRecentActivity() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await sb
       .from('whatsapp_logs')
       .select('*')
       .order('created_at', { ascending: false })
@@ -1211,7 +1211,7 @@ async function loadRecentActivity() {
 async function loadCostToday() {
   try {
     const today = new Date().toISOString().slice(0, 10);
-    const { data, error } = await supabase
+    const { data, error } = await sb
       .from('usage_logs')
       .select('*')
       .eq('date', today)
@@ -1232,7 +1232,7 @@ async function loadCostToday() {
 
 async function loadWAStatus() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await sb
       .from('assistant_settings')
       .select('value')
       .eq('key', 'wa_enabled')
@@ -1257,7 +1257,7 @@ async function toggleWA(enabled) {
   updateWALabel(enabled);
 
   try {
-    const { error } = await supabase
+    const { error } = await sb
       .from('assistant_settings')
       .upsert({ key: 'wa_enabled', value: enabled ? 'true' : 'false', updated_at: new Date().toISOString() });
     if (error) throw error;
@@ -1278,7 +1278,7 @@ function updateStatusDots(online) {
 // ============================================================
 async function loadContacts() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await sb
       .from('contacts')
       .select('*')
       .order('name', { ascending: true });
@@ -1360,9 +1360,9 @@ async function saveContact() {
   try {
     let error;
     if (id) {
-      ({ error } = await supabase.from('contacts').update(payload).eq('id', id));
+      ({ error } = await sb.from('contacts').update(payload).eq('id', id));
     } else {
-      ({ error } = await supabase.from('contacts').insert(payload));
+      ({ error } = await sb.from('contacts').insert(payload));
     }
     if (error) throw error;
     showToast(id ? 'Contact updated' : 'Contact added', 'success');
@@ -1377,7 +1377,7 @@ async function saveContact() {
 async function deleteContact(id) {
   if (!confirm('Delete this contact?')) return;
   try {
-    const { error } = await supabase.from('contacts').delete().eq('id', id);
+    const { error } = await sb.from('contacts').delete().eq('id', id);
     if (error) throw error;
     showToast('Contact deleted', 'success');
     loadContacts();
@@ -1391,7 +1391,7 @@ async function deleteContact(id) {
 // ============================================================
 async function loadMeetings() {
   try {
-    let query = supabase.from('pending_meetings').select('*').order('created_at', { ascending: false });
+    let query = sb.from('pending_meetings').select('*').order('created_at', { ascending: false });
 
     if (currentMeetingTab === 'pending') {
       query = query.eq('status', 'waiting');
@@ -1469,7 +1469,7 @@ async function handleMeeting(id, action, btn) {
 // ============================================================
 async function loadTasks() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await sb
       .from('tasks')
       .select('*')
       .order('created_at', { ascending: false });
@@ -1519,7 +1519,7 @@ function renderTasks() {
 
 async function toggleTask(id, done) {
   try {
-    const { error } = await supabase.from('tasks').update({ done }).eq('id', id);
+    const { error } = await sb.from('tasks').update({ done }).eq('id', id);
     if (error) throw error;
     const task = allTasks.find(t => t.id === id);
     if (task) task.done = done;
@@ -1563,9 +1563,9 @@ async function saveTask() {
     let error;
     if (id) {
       delete payload.done;
-      ({ error } = await supabase.from('tasks').update(payload).eq('id', id));
+      ({ error } = await sb.from('tasks').update(payload).eq('id', id));
     } else {
-      ({ error } = await supabase.from('tasks').insert(payload));
+      ({ error } = await sb.from('tasks').insert(payload));
     }
     if (error) throw error;
     showToast(id ? 'Task updated' : 'Task added', 'success');
@@ -1580,7 +1580,7 @@ async function saveTask() {
 async function deleteTask(id) {
   if (!confirm('Delete this task?')) return;
   try {
-    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    const { error } = await sb.from('tasks').delete().eq('id', id);
     if (error) throw error;
     showToast('Task deleted', 'success');
     loadTasks();
@@ -1594,7 +1594,7 @@ async function deleteTask(id) {
 // ============================================================
 async function loadSettings() {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await sb
       .from('assistant_settings')
       .select('*');
 
@@ -1618,7 +1618,7 @@ async function loadSettings() {
 
 async function saveSetting(key, value) {
   try {
-    const { error } = await supabase
+    const { error } = await sb
       .from('assistant_settings')
       .upsert({ key, value, updated_at: new Date().toISOString() });
     if (error) throw error;
@@ -1631,7 +1631,7 @@ async function saveSetting(key, value) {
 async function clearWAHistory() {
   if (!confirm('This will delete all WhatsApp conversation history. Are you sure?')) return;
   try {
-    const { error } = await supabase
+    const { error } = await sb
       .from('assistant_messages')
       .delete()
       .like('chat_id', 'wa_%');
@@ -1645,7 +1645,7 @@ async function clearWAHistory() {
 async function clearAllTasks() {
   if (!confirm('This will delete ALL tasks. Are you sure?')) return;
   try {
-    const { error } = await supabase
+    const { error } = await sb
       .from('tasks')
       .delete()
       .neq('id', '00000000-0000-0000-0000-000000000000');
@@ -1662,7 +1662,7 @@ async function clearAllTasks() {
 // REALTIME SUBSCRIPTIONS
 // ============================================================
 function setupRealtime() {
-  supabase.channel('public:whatsapp_logs')
+  sb.channel('public:whatsapp_logs')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'whatsapp_logs' }, payload => {
       const activePage = localStorage.getItem('rabih_active_page') || 'dashboard';
       if (activePage === 'dashboard') {
@@ -1676,7 +1676,7 @@ function setupRealtime() {
     })
     .subscribe();
 
-  supabase.channel('public:pending_meetings')
+  sb.channel('public:pending_meetings')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_meetings' }, payload => {
       const activePage = localStorage.getItem('rabih_active_page') || 'dashboard';
       if (activePage === 'meetings') loadMeetings();
