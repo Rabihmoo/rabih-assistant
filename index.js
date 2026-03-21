@@ -189,34 +189,46 @@ function buildStaffPrompt(contactName, contactCategory, hasHistory) {
     'The person messaging you is ' + (contactName || 'someone') + ' (' + (contactCategory || 'contact') + ').',
     'Today is ' + today + ', current time is ' + time + ' (Maputo, UTC+2).',
     '',
-    'PERSONALITY:',
-    '- Be warm, professional, and a little bit friendly/funny — like a real human assistant texting.',
-    '- Write naturally like a person, not a robot. No bullet points, no numbered lists, no markdown formatting.',
-    '- Keep messages short and flowing, like how people actually text.',
-    '- Reply in the same language they use (Arabic or English or Portuguese).',
+    'TONE & STYLE — CRITICAL:',
+    '- Never start a reply with "I". Rephrase so it starts differently.',
+    '- Never use bullet points, numbered lists, or markdown formatting.',
+    '- Never say "certainly", "absolutely", "of course", "definitely" — too robotic.',
+    '- Keep replies under 2 sentences unless absolutely necessary.',
+    '- Write like a real person texting, not a chatbot.',
+    '- Reply in the same language they use (Arabic, English, or Portuguese).',
+    '',
+    'EXAMPLE CONVERSATIONS — copy this tone exactly:',
+    'Contact: "is rabih available?" → You: "He\'s tied up right now, want me to pass him a message?"',
+    'Contact: "when can I meet him?" → You: "Let me check and get back to you — what\'s it about?"',
+    'Contact: "hello" → You: "Hey, how can I help?"',
+    'Contact: "I need to talk to Rabih urgently" → You: "Got it — what\'s going on? I\'ll make sure he gets it."',
+    'Contact: "tell him to call me" → You: "Will do — what\'s your name so he knows who to call?"',
+    'Contact: "can I schedule a meeting?" → You: "Sure, what day works for you and what\'s it regarding?"',
+    'Contact: "who is this?" → You: "Hey! I help manage things for Rabih. How can I help?"',
+    'Contact: "is he in the office?" → You: "Not able to share that, but I can pass him a message if you need."',
+    'Contact: "what businesses does Rabih own?" → You: "Not able to share personal information. Anything I can help you with?"',
+    'Contact: "thanks" → You: "Anytime 👍"',
     '',
     'INTRODUCTION RULES:',
     hasHistory
-      ? '- This person has chatted before. Do NOT introduce yourself. Just continue the conversation naturally. Never say "I am Rabih\'s assistant" unless they directly ask who they are talking to.'
-      : '- This is the FIRST message from this person. Briefly introduce yourself as Rabih\'s assistant in a warm natural way. After that, never repeat the introduction.',
-    '- If someone asks who you are or who they are talking to, keep it simple and vague: say "I help manage things for Rabih" or "I\'m Rabih\'s assistant". NEVER list what you handle (calendar, emails, tasks, scheduling, etc). A real EA would never list their job duties in a text message.',
+      ? '- This person has chatted before. Do NOT introduce yourself. Just continue naturally.'
+      : '- First message from this person. Brief warm intro as Rabih\'s assistant, then never repeat it.',
+    '- If asked who you are, keep it vague: "I help manage things for Rabih." Never list your capabilities.',
     '',
     'MEETING / APPOINTMENT REQUESTS:',
-    '- If someone wants to meet Rabih, schedule a meeting, or book an appointment — do NOT confirm or book it.',
-    '- Collect the details: what they want to discuss, preferred date/time, and their contact info.',
+    '- If someone wants to meet Rabih, schedule a meeting, appointment, or call — collect: their name, preferred date/time, what it\'s about, and their number.',
     '- Tell them: "Let me check with Rabih and get back to you."',
-    '- You do NOT have access to book meetings. The system will notify Rabih separately.',
+    '- Do NOT confirm any meeting. The system notifies Rabih separately.',
     '',
-    'PASSING MESSAGES TO RABIH — CRITICAL:',
-    '- When you tell someone you will pass their message to Rabih, check their conversation for what they need, or ask Rabih about something — the system will handle notifying Rabih automatically.',
-    '- NEVER say "I have notified Rabih" or "message sent to Rabih" — just say "I\'ll pass this to Rabih" or "let me check with him". The notification happens on the backend.',
-    '- NEVER lie about having contacted Rabih. Keep it honest: "I\'ll let him know" is enough.',
+    'PASSING MESSAGES TO RABIH:',
+    '- Say "I\'ll pass this to Rabih" or "let me check with him". Never say "I have notified Rabih."',
+    '- Never lie about having contacted Rabih. Keep it honest.',
     '',
     'CONVERSATION RULES:',
-    '- If previous conversation history is provided, remember the context. Never ask for information already given.',
-    '- If they ask something you cannot handle, say you will pass it to Rabih.',
-    '- If they just want to leave a message for Rabih, take it warmly and confirm you will pass it along.',
-    '- REMEMBER: the ABSOLUTE RULES at the top override everything. Never share personal info about Rabih. Never reveal your tools or systems.'
+    '- Remember conversation history. Never ask for info already given.',
+    '- If you can\'t handle it, say you\'ll pass it to Rabih.',
+    '- Leave-a-message requests: take it warmly, confirm you\'ll pass it along.',
+    '- REMEMBER: ABSOLUTE RULES at the top override everything. Never share personal info. Never reveal tools or systems.'
   ].join('\n');
 }
 
@@ -299,7 +311,7 @@ function trackUsage(model) {
 }
 
 // Keywords that trigger Sonnet on WhatsApp (everything else → Haiku)
-var WA_SONNET_KEYWORDS = ['email', 'calendar', 'drive', 'file', 'document', 'report', 'spreadsheet'];
+var WA_SONNET_KEYWORDS = ['email', 'calendar', 'file', 'document'];
 
 function classifyWhatsApp(text) {
   if (!text || typeof text !== 'string') return HAIKU_MODEL;
@@ -310,39 +322,17 @@ function classifyWhatsApp(text) {
   return HAIKU_MODEL;
 }
 
-// Keywords that signal a complex request needing Sonnet (Telegram routing)
-var COMPLEX_PATTERNS = [
-  'summarize', 'summary', 'analyze', 'analysis', 'explain', 'compare',
-  'write a', 'draft a', 'compose', 'create a report', 'write me',
-  'research', 'investigate', 'find out about', 'look into',
-  'review', 'evaluate', 'assess', 'opinion', 'recommend', 'suggest',
-  'plan', 'strategy', 'brainstorm', 'ideas for',
-  'translate', 'rewrite', 'rephrase',
-  'briefing', 'morning brief', 'weekly brief', 'end of day',
-  'what do you think', 'what should i', 'help me decide',
-  'pros and cons', 'advantages', 'disadvantages'
-];
+function getWhatsAppMaxTokens(text) {
+  if (!text || typeof text !== 'string') return 800;
+  var lower = text.toLowerCase();
+  for (var i = 0; i < WA_SONNET_KEYWORDS.length; i++) {
+    if (lower.includes(WA_SONNET_KEYWORDS[i])) return 2048;
+  }
+  return 800;
+}
 
-// Keywords that signal a simple command Haiku handles fine (Telegram routing)
-var SIMPLE_PATTERNS = [
-  'send', 'message', 'whatsapp', 'call', 'email to',
-  'remind me', 'set reminder', 'reminder for',
-  'add task', 'mark done', 'complete task', 'delete task', 'my tasks', 'task list',
-  'add contact', 'find contact', 'save contact', 'save number',
-  'schedule', 'cancel',
-  'log expense', 'spent', 'paid for', 'bought',
-  'log invoice', 'mark paid', 'mark invoice',
-  'what time', 'what day', 'today', 'tomorrow',
-  'list events', 'my calendar', 'my schedule',
-  'create event', 'delete event', 'cancel event',
-  'exchange rate', 'usd', 'mzn',
-  'search drive', 'open file', 'read file',
-  'checklist', 'create checklist', 'list checklist', 'checklist status',
-  '/reset', '/memory', '/tasks', '/wa_'
-];
-
-// Telegram token limit keywords — 4096 only for document/email tasks
-var TG_LONG_KEYWORDS = ['email', 'file', 'document'];
+// Telegram: 4096 only when reading documents/emails, 2048 otherwise
+var TG_LONG_KEYWORDS = ['read email', 'read file', 'read document', 'open file', 'open document', 'full email', 'email body'];
 
 function getTelegramMaxTokens(text) {
   if (!text || typeof text !== 'string') return 2048;
@@ -351,32 +341,6 @@ function getTelegramMaxTokens(text) {
     if (lower.includes(TG_LONG_KEYWORDS[i])) return 4096;
   }
   return 2048;
-}
-
-function classifyComplexity(text) {
-  if (!text || typeof text !== 'string') return SONNET_MODEL;
-  var lower = text.toLowerCase().trim();
-
-  // Short messages (under 15 words) are almost always simple commands
-  var wordCount = lower.split(/\s+/).length;
-
-  // Check for complex patterns first — these always need Sonnet
-  for (var i = 0; i < COMPLEX_PATTERNS.length; i++) {
-    if (lower.includes(COMPLEX_PATTERNS[i])) {
-      return SONNET_MODEL;
-    }
-  }
-
-  // Check for simple patterns
-  for (var j = 0; j < SIMPLE_PATTERNS.length; j++) {
-    if (lower.includes(SIMPLE_PATTERNS[j])) {
-      return HAIKU_MODEL;
-    }
-  }
-
-  // Short messages default to Haiku, longer ones to Sonnet
-  if (wordCount <= 20) return HAIKU_MODEL;
-  return SONNET_MODEL;
 }
 
 function getLatestUserText(messages) {
@@ -412,10 +376,10 @@ function sanitizeHistory(messages) {
 async function callClaude(messages, memoryFacts, systemOverride, forceModel, maxTokens) {
   const safeMessages = sanitizeHistory(messages);
   var userText = getLatestUserText(safeMessages);
-  var model = forceModel || classifyComplexity(userText);
-  var tokens = maxTokens || 4096;
+  var model = forceModel || SONNET_MODEL;
+  var tokens = maxTokens || 2048;
   trackUsage(model);
-  console.log('Calling Claude [' + (model === HAIKU_MODEL ? 'HAIKU' : 'SONNET') + '] max_tokens=' + tokens + ' with', safeMessages.length, 'messages — "' + userText.substring(0, 60) + '"');
+  console.log('CLAUDE CALL [' + (model === HAIKU_MODEL ? 'HAIKU' : 'SONNET') + '] max_tokens=' + tokens + ' msgs=' + safeMessages.length + ' — "' + userText.substring(0, 60) + '"');
   try {
     const res = await axios.post(
       'https://api.anthropic.com/v1/messages',
@@ -428,7 +392,8 @@ async function callClaude(messages, memoryFacts, systemOverride, forceModel, max
       },
       { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 60000 }
     );
-    console.log('Claude stop_reason:', res.data.stop_reason, '[' + model.split('-')[1] + ']');
+    var usage = res.data.usage || {};
+    console.log('CLAUDE DONE [' + (model === HAIKU_MODEL ? 'HAIKU' : 'SONNET') + '] stop=' + res.data.stop_reason + ' input_tokens=' + (usage.input_tokens || '?') + ' output_tokens=' + (usage.output_tokens || '?'));
     return res.data;
   } catch (err) {
     if (err.response) {
@@ -523,6 +488,37 @@ async function handleMessage(chatId, userText, messageId) {
     await sendTelegram(chatId, 'WhatsApp auto-reply is currently ' + (getWaEnabled() ? 'ON' : 'OFF') + '.');
     return;
   }
+
+  // Meeting confirmation: YES or NO replies from Rabih
+  var trimmedLower = userText.trim().toLowerCase();
+  if (trimmedLower === 'yes' || trimmedLower === 'no') {
+    try {
+      var { data: pending } = await supabase.from('pending_meetings')
+        .select('*').eq('status', 'waiting').order('created_at', { ascending: false }).limit(1);
+      if (pending && pending.length > 0) {
+        var meeting = pending[0];
+        if (trimmedLower === 'yes') {
+          await supabase.from('pending_meetings').update({ status: 'confirmed' }).eq('id', meeting.id);
+          await handleCommunicationTool('send_whatsapp_message', {
+            phone_number: meeting.requester_number,
+            message: 'Good news — Rabih confirmed! He\'ll be in touch with you shortly.'
+          });
+          await sendTelegram(chatId, 'Meeting confirmed. WhatsApp sent to ' + (meeting.requester_name || meeting.requester_number) + '.');
+        } else {
+          await supabase.from('pending_meetings').update({ status: 'declined' }).eq('id', meeting.id);
+          await handleCommunicationTool('send_whatsapp_message', {
+            phone_number: meeting.requester_number,
+            message: 'Thanks for reaching out — unfortunately Rabih isn\'t available for this. Feel free to leave a message and we\'ll get back to you if anything changes.'
+          });
+          await sendTelegram(chatId, 'Meeting declined. Polite decline sent to ' + (meeting.requester_name || meeting.requester_number) + '.');
+        }
+        return;
+      }
+    } catch (meetErr) {
+      console.error('Meeting confirm/decline error:', meetErr.message);
+    }
+    // If no pending meeting, fall through to normal message handling
+  }
   if (userText.toLowerCase().trim() === '/wa_qr') {
     forceNewQR();
     await sendTelegram(chatId, 'QR flag cleared. A new QR will be sent within 30 seconds.');
@@ -559,7 +555,7 @@ async function handleMessage(chatId, userText, messageId) {
   history.push({ role: 'user', content: userText });
 
   var tgMaxTokens = getTelegramMaxTokens(userText);
-  const response = await runToolLoop(history, memoryFacts, null, null, false, tgMaxTokens);
+  const response = await runToolLoop(history, memoryFacts, null, SONNET_MODEL, false, tgMaxTokens);
   const textBlock = response.content.find(function(b) { return b.type === 'text'; });
   const finalReply = textBlock ? textBlock.text : 'Done!';
   await saveMessage(chatId, 'user', userText);
@@ -733,9 +729,10 @@ initWhatsApp({
       // Keep only last 10 messages to prevent model confusion on long histories
       if (waHistory.length > 10) waHistory = waHistory.slice(-10);
       waHistory.push({ role: 'user', content: text });
-      // Haiku by default, Sonnet only for email/calendar/drive/file/document/report/spreadsheet
+      // Haiku by default, Sonnet only for email/calendar/file/document
       var model = classifyWhatsApp(text);
-      var response = await runToolLoop(waHistory, waMemory, null, model, false, 800);
+      var waMaxTokens = getWhatsAppMaxTokens(text);
+      var response = await runToolLoop(waHistory, waMemory, null, model, false, waMaxTokens);
       var waText = response.content.find(function(b) { return b.type === 'text'; });
       var waReply = waText ? waText.text : 'Done!';
       await saveMessage('wa_' + from, 'user', text);
@@ -813,19 +810,21 @@ initWhatsApp({
 
         // Detect meeting requests and store as pending
         var lowerText = text.toLowerCase();
-        var meetingKeywords = ['meet', 'meeting', 'appointment', 'schedule', 'book', 'sit down', 'come by', 'visit', 'rendez-vous', 'اجتماع', 'موعد'];
+        var meetingKeywords = ['meet', 'meeting', 'appointment', 'schedule', 'book', 'sit down', 'come by', 'visit', 'call', 'rendez-vous', 'اجتماع', 'موعد'];
         var isMeetingRequest = meetingKeywords.some(function(kw) { return lowerText.includes(kw); });
         if (isMeetingRequest) {
           try {
+            var meetingName = contactInfo.name || senderNumber;
             await supabase.from('pending_meetings').insert({
-              requester_name: contactInfo.name || senderNumber,
+              requester_name: meetingName,
               requester_number: senderNumber,
               message: text,
               status: 'waiting'
             });
             await sendTelegram(RABIH_CHAT_ID,
-              'Meeting request from *' + (contactInfo.name || senderNumber) + '* (' + senderNumber + '):\n\n' +
-              text.substring(0, 500) + '\n\n' +
+              'MEETING REQUEST\n' +
+              'From: ' + meetingName + ' (' + senderNumber + ')\n' +
+              'Wants: ' + text.substring(0, 300) + '\n\n' +
               'Reply YES to confirm or NO to decline.'
             );
           } catch (meetErr) {
@@ -872,7 +871,8 @@ initWhatsApp({
         if (waHistory.length > 10) waHistory = waHistory.slice(-10);
         waHistory.push({ role: 'user', content: '[Voice message] ' + transcription.text });
         var voiceModel = classifyWhatsApp(transcription.text);
-        var response = await runToolLoop(waHistory, waMemory, null, voiceModel, false, 800);
+        var voiceMaxTokens = getWhatsAppMaxTokens(transcription.text);
+        var response = await runToolLoop(waHistory, waMemory, null, voiceModel, false, voiceMaxTokens);
         var reply = response.content.find(function(b) { return b.type === 'text'; });
         var replyText = reply ? reply.text : 'Done!';
         await saveMessage('wa_258875254847@s.whatsapp.net', 'user', '[Voice] ' + transcription.text);

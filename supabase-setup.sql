@@ -105,6 +105,16 @@ CREATE TABLE IF NOT EXISTS checklist_responses (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Pending meeting requests
+CREATE TABLE IF NOT EXISTS pending_meetings (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  requester_name TEXT NOT NULL,
+  requester_number TEXT NOT NULL,
+  message TEXT DEFAULT '',
+  status TEXT DEFAULT 'waiting',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Daily API usage tracking
 CREATE TABLE IF NOT EXISTS usage_logs (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
