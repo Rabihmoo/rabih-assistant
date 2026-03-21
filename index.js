@@ -549,119 +549,87 @@ async function handleMessage(chatId, userText, messageId) {
     return;
   }
 
-  // Meeting confirmation: "YES", "NO", "YES 258...", "NO 258..." — intercept BEFORE Claude
-  var meetingTrimmed = userText.trim().toLowerCase();
-  var isMeetingReply = meetingTrimmed === 'yes' || meetingTrimmed === 'no' || /^(yes|no)\s/i.test(userText.trim());
-  if (isMeetingReply) {
-    var meetingMatch = userText.trim().match(/^(yes|no)(?:\s+(\d+))?/i);
-    var meetingAction = meetingMatch ? meetingMatch[1].toLowerCase() : meetingTrimmed;
-    var meetingNumber = meetingMatch ? (meetingMatch[2] || null) : null;
+  // ===== MEETING YES/NO — MUST BE FIRST, BEFORE CLAUDE =====
+  var meetingInput = userText.trim();
+  var meetingLower = meetingInput.toLowerCase();
+  if (meetingLower === 'yes' || meetingLower === 'no' || /^(yes|no)\s+\d/i.test(meetingInput)) {
+    var mMatch = meetingInput.match(/^(yes|no)(?:\s+(\d+))?/i);
+    var mAction = mMatch[1].toLowerCase();
+    var mNumber = mMatch[2] || null;
     try {
-      // Always check for pending meetings first
-      var allPending = await supabase.from('pending_meetings')
+      var { data: allWaiting } = await supabase.from('pending_meetings')
         .select('*').eq('status', 'waiting').order('created_at', { ascending: false });
-      var pendingList = allPending.data || [];
-
-      if (pendingList.length === 0) {
-        // No pending meetings — fall through to Claude
-      } else {
-        var pending;
-        if (meetingNumber) {
-          pending = pendingList.filter(function(m) { return m.requester_number === meetingNumber; });
-        } else if (pendingList.length === 1) {
-          pending = pendingList;
+      allWaiting = allWaiting || [];
+      if (allWaiting.length > 0) {
+        console.log('MEETING HANDLER — intercepted "' + meetingInput + '", ' + allWaiting.length + ' pending meetings');
+        var meeting = null;
+        if (mNumber) {
+          meeting = allWaiting.find(function(m) { return m.requester_number === mNumber; });
+          if (!meeting) { await sendTelegram(chatId, 'No pending meeting for ' + mNumber + '.'); return; }
+        } else if (allWaiting.length === 1) {
+          meeting = allWaiting[0];
         } else {
-          // Multiple pending — ask for number
-          var list = pendingList.map(function(m, i) {
-            return (i+1) + '. ' + (m.requester_name || m.requester_number) + ' (' + m.requester_number + '): ' + (m.message || '').substring(0, 80);
+          var mList = allWaiting.map(function(m, i) {
+            return (i+1) + '. ' + (m.requester_name || m.requester_number) + ' (' + m.requester_number + ')';
           }).join('\n');
-          await sendTelegram(chatId, 'Multiple pending meetings — reply with the number:\n\n' + list + '\n\nExample: YES ' + pendingList[0].requester_number);
+          await sendTelegram(chatId, 'Multiple pending meetings:\n\n' + mList + '\n\nReply: YES ' + allWaiting[0].requester_number);
           return;
         }
-      if (pending && pending.length > 0) {
-        var meeting = pending[0];
-        var meetingLabel = meeting.requester_name || meeting.requester_number;
-        if (meetingAction === 'yes') {
+        var mLabel = meeting.requester_name || meeting.requester_number;
+        if (mAction === 'yes') {
+          // 1. Update status
           await supabase.from('pending_meetings').update({ status: 'confirmed' }).eq('id', meeting.id);
-
-          // Extract date/time from the meeting message using Haiku
+          // 2. Extract date/time with Haiku
           var dateInfo = { date: '', time: '' };
           try {
-            var now = new Date();
-            var todayStr = now.toISOString().split('T')[0];
+            var todayStr = new Date().toISOString().split('T')[0];
             var extractRes = await axios.post('https://api.anthropic.com/v1/messages', {
               model: HAIKU_MODEL, max_tokens: 100,
-              system: 'Extract the meeting date and time from this message. Today is ' + todayStr + '. If "tomorrow" is mentioned, calculate the actual date. Return ONLY a JSON object: {"date":"YYYY-MM-DD","time":"HH:MM"}. If no specific date/time mentioned, use {"date":"","time":""}. No other text.',
+              system: 'Extract the meeting date and time from this message. Today is ' + todayStr + '. If "tomorrow" is mentioned, calculate the actual date. Return ONLY JSON: {"date":"YYYY-MM-DD","time":"HH:MM"}. If unknown use empty strings. No other text.',
               messages: [{ role: 'user', content: meeting.message }]
             }, { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 15000 });
             trackUsage(HAIKU_MODEL);
-            var extractText = extractRes.data.content[0].text.trim();
-            var jsonMatch = extractText.match(/\{[^}]+\}/);
-            if (jsonMatch) dateInfo = JSON.parse(jsonMatch[0]);
-          } catch (extractErr) {
-            console.error('Date extraction error:', extractErr.message);
-          }
-
-          // Build WhatsApp confirmation message
-          var waConfirmMsg = 'Rabih confirmed';
-          if (dateInfo.date && dateInfo.time) {
-            waConfirmMsg += ' — see you ' + dateInfo.date + ' at ' + dateInfo.time + '. Looking forward to it!';
-          } else if (dateInfo.date) {
-            waConfirmMsg += ' — see you on ' + dateInfo.date + '. Looking forward to it!';
-          } else {
-            waConfirmMsg += '! He\'ll be in touch with you shortly to set the time.';
-          }
-          await handleCommunicationTool('send_whatsapp_message', {
-            phone_number: meeting.requester_number,
-            message: waConfirmMsg
-          });
-
-          // Create Google Calendar event if we have date/time
-          var calendarNote = '';
+            var jm = extractRes.data.content[0].text.match(/\{[^}]+\}/);
+            if (jm) dateInfo = JSON.parse(jm[0]);
+          } catch (eErr) { console.error('Date extraction error:', eErr.message); }
+          // 3. Send WhatsApp to contact
+          var waMsg = 'Rabih confirmed';
+          if (dateInfo.date && dateInfo.time) waMsg += ' — see you ' + dateInfo.date + ' at ' + dateInfo.time + '. Looking forward to it!';
+          else if (dateInfo.date) waMsg += ' — see you on ' + dateInfo.date + '. Looking forward to it!';
+          else waMsg += '! He\'ll be in touch shortly to set the time.';
+          await handleCommunicationTool('send_whatsapp_message', { phone_number: meeting.requester_number, message: waMsg });
+          console.log('MEETING YES — WhatsApp sent to', meeting.requester_number);
+          // 4. Create Google Calendar event
+          var calNote = '';
           if (dateInfo.date && dateInfo.time) {
             try {
-              await handleCalendarTool('create_calendar_event', {
-                title: 'Meeting with ' + meetingLabel,
-                date: dateInfo.date,
-                time: dateInfo.time,
-                duration_minutes: 60
-              });
-              calendarNote = ' Calendar event created.';
-            } catch (calErr) {
-              console.error('Calendar create error:', calErr.message);
-              calendarNote = ' (Calendar event failed: ' + calErr.message + ')';
-            }
+              await handleCalendarTool('create_calendar_event', { title: 'Meeting with ' + mLabel, date: dateInfo.date, time: dateInfo.time, duration_minutes: 60 });
+              calNote = '\nCalendar event created';
+              console.log('MEETING YES — Calendar event created for', dateInfo.date, dateInfo.time);
+            } catch (cErr) { calNote = '\nCalendar failed: ' + cErr.message; console.error('Calendar create error:', cErr.message); }
           }
-
-          // Confirm back to Rabih on Telegram
-          var tgConfirm = 'Done ✅ Meeting confirmed with ' + meetingLabel;
-          if (dateInfo.date && dateInfo.time) {
-            tgConfirm += ' on ' + dateInfo.date + ' at ' + dateInfo.time + '.';
-          } else if (dateInfo.date) {
-            tgConfirm += ' on ' + dateInfo.date + '.';
-          } else {
-            tgConfirm += '.';
-          }
-          tgConfirm += calendarNote;
-          await sendTelegram(chatId, tgConfirm);
+          // 5. Confirm to Rabih on Telegram
+          var tg = 'Done ✅\nMeeting confirmed with ' + mLabel;
+          if (dateInfo.date && dateInfo.time) tg += '\nDate: ' + dateInfo.date + ' at ' + dateInfo.time;
+          else if (dateInfo.date) tg += '\nDate: ' + dateInfo.date;
+          tg += '\nWhatsApp sent to ' + meeting.requester_number;
+          tg += calNote;
+          await sendTelegram(chatId, tg);
         } else {
           await supabase.from('pending_meetings').update({ status: 'declined' }).eq('id', meeting.id);
-          await handleCommunicationTool('send_whatsapp_message', {
-            phone_number: meeting.requester_number,
-            message: 'Unfortunately Rabih is not available at that time. Feel free to suggest another time.'
-          });
-          await sendTelegram(chatId, 'Meeting declined. Polite decline sent to ' + meetingLabel + '.');
+          await handleCommunicationTool('send_whatsapp_message', { phone_number: meeting.requester_number, message: 'Unfortunately Rabih is not available at that time. Feel free to suggest another time.' });
+          await sendTelegram(chatId, 'Meeting declined. Polite decline sent to ' + mLabel + '.');
+          console.log('MEETING NO — decline sent to', meeting.requester_number);
         }
-        return;
-      } else if (meetingNumber) {
-        await sendTelegram(chatId, 'No pending meeting found for ' + meetingNumber + '.');
-        return;
+        return; // DONE — no Claude call
       }
-      } // close the else block from pendingList.length check
+      // No pending meetings — fall through to Claude
+      console.log('YES/NO with no pending meetings — passing to Claude');
     } catch (meetErr) {
-      console.error('Meeting confirm/decline error:', meetErr.message);
+      console.error('Meeting handler error:', meetErr.message);
     }
   }
+  // ===== END MEETING HANDLER =====
   if (userText.toLowerCase().trim() === '/wa_qr') {
     forceNewQR();
     await sendTelegram(chatId, 'QR flag cleared. A new QR will be sent within 30 seconds.');
@@ -691,6 +659,7 @@ async function handleMessage(chatId, userText, messageId) {
     return;
   }
 
+  console.log('TELEGRAM → CLAUDE path triggered for: "' + userText.substring(0, 80) + '"');
   await sendTyping(chatId);
   var [history, memoryFacts] = await Promise.all([loadHistory(chatId), loadMemory()]);
   // Keep last 20 messages for Telegram (more room than WhatsApp but still bounded)
