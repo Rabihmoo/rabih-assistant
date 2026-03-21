@@ -18,10 +18,6 @@ let lastBadMacReset = Date.now();
 const sentMessages = new Set();
 const processedMessages = new Set();
 
-// Human takeover: when Rabih manually replies to a contact, bot stays silent for 30 min
-const humanActive = {};
-const HUMAN_ACTIVE_DURATION = 30 * 60 * 1000; // 30 minutes
-
 const RABIH_NUMBER = '258875254847';
 
 // Use /data (Railway Volume) if available, fallback to /tmp
@@ -228,25 +224,6 @@ async function initWhatsApp(options) {
           sentMessages.delete(messageId);
           return;
         }
-
-        // ====== HUMAN TAKEOVER DETECTION ======
-        // When Rabih manually sends a message (fromMe:true), mark that contact as human-active
-        if (msg.key.fromMe === true) {
-          humanActive[from] = Date.now();
-          console.log('Human takeover activated for', from, '— bot silent for 30 min');
-          return; // Don't generate bot reply when Rabih is manually talking
-        }
-        // If Rabih recently replied manually to this contact, bot stays silent
-        if (!isFromRabih && humanActive[from] && (Date.now() - humanActive[from] < HUMAN_ACTIVE_DURATION)) {
-          console.log('Human active for', from, '— bot staying silent');
-          return;
-        }
-        // Clean up expired flags periodically
-        if (!isFromRabih && humanActive[from] && (Date.now() - humanActive[from] >= HUMAN_ACTIVE_DURATION)) {
-          delete humanActive[from];
-          console.log('Human takeover expired for', from, '— bot resuming');
-        }
-        // ======================================
 
         // Prevent concurrent processing (with 90s safety timeout to prevent permanent lock)
         if (isProcessing) {

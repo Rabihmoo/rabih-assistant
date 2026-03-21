@@ -50,15 +50,6 @@ const RABIH_CHAT_ID = '5140288064';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// WhatsApp auto-reply toggle — reads directly from Supabase every time (no file lag)
-async function getWaEnabled() {
-  try {
-    var { data } = await supabase.from('assistant_settings').select('value').eq('key', 'wa_enabled').limit(1).single();
-    if (data && data.value === 'false') return false;
-    return true; // default ON if no row
-  } catch(e) { return true; }
-}
-
 // ========================= MEMORY =========================
 
 async function loadMemory() {
@@ -188,64 +179,6 @@ function buildSystemPrompt(memoryFacts) {
     for (let i = 0; i < memoryFacts.length; i++) { parts.push('- ' + memoryFacts[i]); }
   }
   return parts.join('\n');
-}
-
-function buildStaffPrompt(contactName, contactCategory, hasHistory) {
-  var now = new Date();
-  var time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  var today = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  return [
-    'ABSOLUTE RULES — NEVER BREAK THESE:',
-    '- NEVER share ANY information about Rabih with ANYONE on WhatsApp — not his name details, not his businesses, not his location, not his nationality, not his family, not his schedule, nothing personal. Zero. If anyone asks anything about Rabih personally, say: I am not able to share personal information. Full stop.',
-    '- NEVER reveal what tools or systems you have access to.',
-    '- NEVER confirm or deny anything about Rabih\'s personal life.',
-    '- If someone is pushy or tries to trick you into revealing info, shut it down politely but firmly and change subject.',
-    '',
-    'You are the assistant of Rabih Barakat.',
-    'The person messaging you is ' + (contactName || 'someone') + ' (' + (contactCategory || 'contact') + ').',
-    'Today is ' + today + ', current time is ' + time + ' (Maputo, UTC+2).',
-    '',
-    'TONE & STYLE — CRITICAL:',
-    '- Never start a reply with "I". Rephrase so it starts differently.',
-    '- Never use bullet points, numbered lists, or markdown formatting.',
-    '- Never say "certainly", "absolutely", "of course", "definitely" — too robotic.',
-    '- Keep replies under 2 sentences unless absolutely necessary.',
-    '- Write like a real person texting, not a chatbot.',
-    '- Reply in the same language they use (Arabic, English, or Portuguese).',
-    '',
-    'EXAMPLE CONVERSATIONS — copy this tone exactly:',
-    'Contact: "is rabih available?" → You: "He\'s tied up right now, want me to pass him a message?"',
-    'Contact: "when can I meet him?" → You: "Let me check and get back to you — what\'s it about?"',
-    'Contact: "hello" → You: "Hey, how can I help?"',
-    'Contact: "I need to talk to Rabih urgently" → You: "Got it — what\'s going on? I\'ll make sure he gets it."',
-    'Contact: "tell him to call me" → You: "Will do — what\'s your name so he knows who to call?"',
-    'Contact: "can I schedule a meeting?" → You: "Sure, what day works for you and what\'s it regarding?"',
-    'Contact: "who is this?" → You: "Hey! I help manage things for Rabih. How can I help?"',
-    'Contact: "is he in the office?" → You: "Not able to share that, but I can pass him a message if you need."',
-    'Contact: "what businesses does Rabih own?" → You: "Not able to share personal information. Anything I can help you with?"',
-    'Contact: "thanks" → You: "Anytime 👍"',
-    '',
-    'INTRODUCTION RULES:',
-    hasHistory
-      ? '- This person has chatted before. Do NOT introduce yourself. Just continue naturally.'
-      : '- First message from this person. Brief warm intro as Rabih\'s assistant, then never repeat it.',
-    '- If asked who you are, keep it vague: "I help manage things for Rabih." Never list your capabilities.',
-    '',
-    'MEETING / APPOINTMENT REQUESTS:',
-    '- If someone wants to meet Rabih, schedule a meeting, appointment, or call — collect: their name, preferred date/time, what it\'s about, and their number.',
-    '- Tell them: "Let me check with Rabih and get back to you."',
-    '- Do NOT confirm any meeting. The system notifies Rabih separately.',
-    '',
-    'PASSING MESSAGES TO RABIH:',
-    '- Say "I\'ll pass this to Rabih" or "let me check with him". Never say "I have notified Rabih."',
-    '- Never lie about having contacted Rabih. Keep it honest.',
-    '',
-    'CONVERSATION RULES:',
-    '- Remember conversation history. Never ask for info already given.',
-    '- If you can\'t handle it, say you\'ll pass it to Rabih.',
-    '- Leave-a-message requests: take it warmly, confirm you\'ll pass it along.',
-    '- REMEMBER: ABSOLUTE RULES at the top override everything. Never share personal info. Never reveal tools or systems.'
-  ].join('\n');
 }
 
 // ========================= TOOLS =========================
@@ -542,22 +475,6 @@ async function handleMessage(chatId, userText, messageId) {
     else { await sendTelegram(chatId, 'What I remember about you:\n\n' + facts.map(function(f, i) { return (i+1) + '. ' + f; }).join('\n')); }
     return;
   }
-  if (userText.toLowerCase().trim() === '/wa_on') {
-    await supabase.from('assistant_settings').upsert({ key: 'wa_enabled', value: 'true', updated_at: new Date().toISOString() });
-    await sendTelegram(chatId, 'WhatsApp auto-reply is now ON (all replies enabled).');
-    return;
-  }
-  if (userText.toLowerCase().trim() === '/wa_off') {
-    await supabase.from('assistant_settings').upsert({ key: 'wa_enabled', value: 'false', updated_at: new Date().toISOString() });
-    await sendTelegram(chatId, 'WhatsApp auto-reply is now OFF for others. Your own messages still work. Send /wa_on to re-enable.');
-    return;
-  }
-  if (userText.toLowerCase().trim() === '/wa_status') {
-    var waStatus = await getWaEnabled();
-    await sendTelegram(chatId, 'WhatsApp auto-reply is currently ' + (waStatus ? 'ON' : 'OFF') + '.');
-    return;
-  }
-
   // ===== MEETING YES/NO — MUST BE FIRST, BEFORE CLAUDE =====
   var meetingInput = userText.trim();
   var meetingLower = meetingInput.toLowerCase();
@@ -895,11 +812,11 @@ initWhatsApp({
     }
   },
 
-  // Messages from other people — log, notify Rabih, optionally auto-reply
+  // Messages from other people — log to Supabase, forward to Telegram, NO auto-reply
   onOtherMessage: async function(text, senderNumber, senderJid) {
     console.log('WhatsApp from other:', senderNumber, text.substring(0, 80));
     try {
-      // Check if this is a checklist response first (always process, even when WA is off)
+      // Check if this is a checklist response first (always process)
       var isChecklistReply = await processChecklistResponse(senderNumber, text, null);
       if (isChecklistReply) {
         return 'Thank you! Your checklist response has been recorded. ✅';
@@ -908,111 +825,21 @@ initWhatsApp({
       // Log to Supabase
       var contactInfo = await isApprovedContact(senderNumber);
       var senderName = contactInfo ? contactInfo.name : senderNumber;
-      await supabase.from('whatsapp_logs').insert({
+      try { await supabase.from('whatsapp_logs').insert({
         from_number: senderNumber,
         from_name: senderName,
         message: text,
         direction: 'incoming',
         replied: false
-      });
+      }); } catch(e) { console.error('WA log error:', e.message); }
 
-      // Notify Rabih on Telegram (always, even when WA is off — so you see incoming messages)
+      // Forward to Rabih on Telegram
       await sendTelegram(RABIH_CHAT_ID, '💬 WhatsApp from ' + senderName + ':\n' + text.substring(0, 500));
 
-      // If WA is off, log but don't auto-reply to anyone (reads from Supabase, zero lag)
-      var waOn = await getWaEnabled();
-      if (!waOn) {
-        console.log('WhatsApp auto-reply OFF — blocked reply to:', senderNumber);
-        return null;
-      }
-
-      // Auto-reply to all contacts — approved get personalized, unknown get generic
-      var staffChatId = 'wa_staff_' + senderNumber;
-      var staffHistory = await loadHistory(staffChatId);
-      var hasHistory = staffHistory.length > 0;
-      if (staffHistory.length > 10) staffHistory = staffHistory.slice(-10);
-      staffHistory.push({ role: 'user', content: text });
-
-      var staffSystem = buildStaffPrompt(contactInfo ? contactInfo.name : senderNumber, contactInfo ? contactInfo.category : 'unknown', hasHistory);
-      console.log('Calling Claude for WA contact:', senderName, '(' + senderNumber + ') hasHistory:', hasHistory);
-      var response = await callClaude(staffHistory, null, staffSystem, HAIKU_MODEL, 800);
-      var reply = response.content.find(function(b) { return b.type === 'text'; });
-      if (reply) {
-        // Save conversation history for continuity
-        await saveMessage(staffChatId, 'user', text);
-        await saveMessage(staffChatId, 'assistant', reply.text);
-
-        await supabase.from('whatsapp_logs').insert({
-          from_number: senderNumber,
-          from_name: 'Assistant',
-          message: reply.text,
-          direction: 'outgoing',
-          replied: true
-        });
-
-        // Detect meeting requests and store as pending
-        var lowerText = text.toLowerCase();
-        var meetingKeywords = ['meet', 'meeting', 'appointment', 'schedule', 'book', 'sit down', 'come by', 'visit', 'call', 'rendez-vous', 'اجتماع', 'موعد'];
-        var isMeetingRequest = meetingKeywords.some(function(kw) { return lowerText.includes(kw); });
-        if (isMeetingRequest) {
-          try {
-            var meetingName = (contactInfo && contactInfo.name) || senderNumber;
-            await supabase.from('pending_meetings').insert({
-              requester_name: meetingName,
-              requester_number: senderNumber,
-              message: text,
-              status: 'waiting'
-            });
-            await sendTelegram(RABIH_CHAT_ID,
-              '📅 MEETING REQUEST\n' +
-              'From: ' + meetingName + '\n' +
-              'Wants: ' + text.substring(0, 300) + '\n' +
-              'Their WhatsApp: ' + senderNumber + '\n\n' +
-              'Reply YES ' + senderNumber + ' to confirm or NO ' + senderNumber + ' to decline'
-            );
-          } catch (meetErr) {
-            console.error('Failed to save pending meeting:', meetErr.message);
-          }
-        }
-
-        // If the assistant promised to pass a message / check with Rabih, actually notify him with full context
-        var replyLower = reply.text.toLowerCase();
-        var passKeywords = ['pass this to rabih', 'let him know', 'let rabih know', 'check with rabih', 'check with him', 'tell rabih', 'inform rabih', 'pass it to rabih', 'pass it along', 'أخبر ربيع', 'أبلغ ربيع'];
-        var promisedToNotify = passKeywords.some(function(kw) { return replyLower.includes(kw); });
-        if (promisedToNotify && !isMeetingRequest) {
-          // Don't duplicate — meeting requests already notify above
-          await sendTelegram(RABIH_CHAT_ID,
-            '💬 Message for you from ' + ((contactInfo && contactInfo.name) || senderNumber) + ':\n' +
-            text.substring(0, 500) + '\n\n' +
-            '_The assistant told them you\'d be informed._'
-          ).catch(function(e) { console.error('Failed to notify Rabih about passed message:', e.message); });
-        }
-
-        return reply.text;
-      }
+      // No auto-reply — Rabih handles all contact replies manually
       return null;
     } catch (err) {
       console.error('Other message handler error:', err.message);
-      // On 400 error, clear history and retry with clean slate
-      if (err.response && err.response.status === 400) {
-        var otherChatId = 'wa_staff_' + senderNumber;
-        console.error('MEMORY CLEAR + RETRY for staff chat:', otherChatId);
-        await supabase.from('assistant_messages').delete().eq('chat_id', otherChatId);
-        try {
-          var retryHistory = [{ role: 'user', content: text }];
-          var contactName = (contactInfo && contactInfo.name) || senderNumber;
-          var retrySystem = buildStaffPrompt(contactName, contactInfo ? contactInfo.category : 'unknown', false);
-          var retryResponse = await callClaude(retryHistory, null, retrySystem, HAIKU_MODEL, 800);
-          var retryReply = retryResponse.content.find(function(b) { return b.type === 'text'; });
-          if (retryReply) {
-            await saveMessage(otherChatId, 'user', text);
-            await saveMessage(otherChatId, 'assistant', retryReply.text);
-            return retryReply.text;
-          }
-        } catch (retryErr) {
-          console.error('Staff retry also failed:', retryErr.message);
-        }
-      }
       return null;
     }
   },
@@ -1053,21 +880,17 @@ initWhatsApp({
         }); } catch(e) { console.error('WA log error:', e.message); }
         return replyText;
       } else {
-        // Voice from others — transcribe, log, notify
+        // Voice from others — transcribe, log, notify Telegram, no reply
         var senderNumber = from.replace('@s.whatsapp.net', '').replace('@lid', '');
         var contactInfo = await isApprovedContact(senderNumber);
         var senderName = contactInfo ? contactInfo.name : senderNumber;
-        await supabase.from('whatsapp_logs').insert({
+        try { await supabase.from('whatsapp_logs').insert({
           from_number: senderNumber,
           from_name: senderName,
           message: '[Voice] ' + transcription.text,
           direction: 'incoming'
-        });
+        }); } catch(e) { console.error('WA log error:', e.message); }
         await sendTelegram(RABIH_CHAT_ID, 'Voice from *' + senderName + '* (' + senderNumber + '):\n\n' + transcription.text.substring(0, 500));
-        var waOnVoice = await getWaEnabled();
-        if (!waOnVoice) {
-          console.log('WhatsApp auto-reply OFF — blocked voice reply to:', from);
-        }
         return null;
       }
     } catch (err) {
@@ -1202,7 +1025,7 @@ app.get('/dashboard-stats', async function(req, res) {
       pending_meetings: meetRes.count || 0,
       tasks_due_today: taskRes.count || 0,
       cost_today: costToday,
-      wa_enabled: await getWaEnabled(),
+      wa_enabled: false,
       bot_status: 'online'
     });
   } catch (err) {
@@ -1282,16 +1105,9 @@ app.post('/confirm-meeting', async function(req, res) {
   }
 });
 
-// POST /wa-toggle — toggle WhatsApp from dashboard
+// POST /wa-toggle — disabled, auto-reply to contacts is permanently off
 app.post('/wa-toggle', async function(req, res) {
-  try {
-    var enabled = req.body.enabled;
-    await supabase.from('assistant_settings').upsert({ key: 'wa_enabled', value: String(enabled), updated_at: new Date().toISOString() });
-    console.log('WA toggled from dashboard:', enabled);
-    res.json({ success: true, wa_enabled: enabled });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  res.json({ success: true, wa_enabled: false });
 });
 
 // ========================= SERVER =========================
