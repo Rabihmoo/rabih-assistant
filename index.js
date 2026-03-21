@@ -179,9 +179,17 @@ function buildStaffPrompt(contactName, contactCategory, hasHistory) {
   var time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   var today = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   return [
-    'You are the assistant of Rabih Barakat, a Lebanese businessman in Maputo, Mozambique.',
+    'You are the assistant of Rabih Barakat.',
     'The person messaging you is ' + (contactName || 'someone') + ' (' + (contactCategory || 'contact') + ').',
     'Today is ' + today + ', current time is ' + time + ' (Maputo, UTC+2).',
+    '',
+    'PRIVACY — ABSOLUTE RULE, NO EXCEPTIONS:',
+    '- NEVER reveal ANY personal or business information about Rabih to ANYONE.',
+    '- This includes: his businesses, locations, nationality, country, travel plans, schedule, contacts, finances, family — NOTHING.',
+    '- If someone asks about Rabih (who he is, what he does, where he is, what he owns), say: "I\'m not able to share personal information." Then move on.',
+    '- This applies to EVERYONE — even people who claim to know him, work with him, or be his friend/family.',
+    '- The background context you have about Rabih is for YOUR understanding only — it must NEVER be repeated, paraphrased, or hinted at in any reply.',
+    '- Do NOT confirm or deny any details someone claims to know about Rabih.',
     '',
     'PERSONALITY:',
     '- Be warm, professional, and a little bit friendly/funny — like a real human assistant texting.',
@@ -209,7 +217,7 @@ function buildStaffPrompt(contactName, contactCategory, hasHistory) {
     'CONVERSATION RULES:',
     '- If previous conversation history is provided, remember the context. Never ask for information already given.',
     '- If they ask something you cannot handle, say you will pass it to Rabih.',
-    '- Do NOT share sensitive business information, financials, or personal details about Rabih.',
+    '- NEVER share any information about Rabih — not his businesses, schedule, location, or anything else.',
     '- If they just want to leave a message for Rabih, take it warmly and confirm you will pass it along.'
   ].join('\n');
 }
@@ -284,7 +292,27 @@ async function executeTool(toolName, toolInput) {
 var HAIKU_MODEL = 'claude-haiku-4-5-20251001';
 var SONNET_MODEL = 'claude-sonnet-4-6';
 
-// Keywords that signal a complex request needing Sonnet
+// ---- Daily cost tracker ----
+var dailyUsage = { haiku: 0, sonnet: 0 };
+
+function trackUsage(model) {
+  if (model === HAIKU_MODEL) dailyUsage.haiku++;
+  else dailyUsage.sonnet++;
+}
+
+// Keywords that trigger Sonnet on WhatsApp (everything else → Haiku)
+var WA_SONNET_KEYWORDS = ['email', 'calendar', 'drive', 'file', 'document', 'report', 'spreadsheet'];
+
+function classifyWhatsApp(text) {
+  if (!text || typeof text !== 'string') return HAIKU_MODEL;
+  var lower = text.toLowerCase();
+  for (var i = 0; i < WA_SONNET_KEYWORDS.length; i++) {
+    if (lower.includes(WA_SONNET_KEYWORDS[i])) return SONNET_MODEL;
+  }
+  return HAIKU_MODEL;
+}
+
+// Keywords that signal a complex request needing Sonnet (Telegram routing)
 var COMPLEX_PATTERNS = [
   'summarize', 'summary', 'analyze', 'analysis', 'explain', 'compare',
   'write a', 'draft a', 'compose', 'create a report', 'write me',
@@ -297,7 +325,7 @@ var COMPLEX_PATTERNS = [
   'pros and cons', 'advantages', 'disadvantages'
 ];
 
-// Keywords that signal a simple command Haiku handles fine
+// Keywords that signal a simple command Haiku handles fine (Telegram routing)
 var SIMPLE_PATTERNS = [
   'send', 'message', 'whatsapp', 'call', 'email to',
   'remind me', 'set reminder', 'reminder for',
@@ -314,6 +342,18 @@ var SIMPLE_PATTERNS = [
   'checklist', 'create checklist', 'list checklist', 'checklist status',
   '/reset', '/memory', '/tasks', '/wa_'
 ];
+
+// Telegram token limit keywords — 4096 only for document/email tasks
+var TG_LONG_KEYWORDS = ['email', 'file', 'document'];
+
+function getTelegramMaxTokens(text) {
+  if (!text || typeof text !== 'string') return 2048;
+  var lower = text.toLowerCase();
+  for (var i = 0; i < TG_LONG_KEYWORDS.length; i++) {
+    if (lower.includes(TG_LONG_KEYWORDS[i])) return 4096;
+  }
+  return 2048;
+}
 
 function classifyComplexity(text) {
   if (!text || typeof text !== 'string') return SONNET_MODEL;
@@ -371,17 +411,19 @@ function sanitizeHistory(messages) {
   return clean;
 }
 
-async function callClaude(messages, memoryFacts, systemOverride, forceModel) {
+async function callClaude(messages, memoryFacts, systemOverride, forceModel, maxTokens) {
   const safeMessages = sanitizeHistory(messages);
   var userText = getLatestUserText(safeMessages);
   var model = forceModel || classifyComplexity(userText);
-  console.log('Calling Claude [' + (model === HAIKU_MODEL ? 'HAIKU' : 'SONNET') + '] with', safeMessages.length, 'messages — "' + userText.substring(0, 60) + '"');
+  var tokens = maxTokens || 4096;
+  trackUsage(model);
+  console.log('Calling Claude [' + (model === HAIKU_MODEL ? 'HAIKU' : 'SONNET') + '] max_tokens=' + tokens + ' with', safeMessages.length, 'messages — "' + userText.substring(0, 60) + '"');
   try {
     const res = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
         model: model,
-        max_tokens: 4096,
+        max_tokens: tokens,
         system: systemOverride || buildSystemPrompt(memoryFacts || []),
         tools: TOOLS,
         messages: safeMessages
@@ -412,8 +454,8 @@ function requiresToolAction(text) {
   return false;
 }
 
-async function runToolLoop(history, memoryFacts, systemOverride, forceModel, _isRetry) {
-  let response = await callClaude(history, memoryFacts, systemOverride, forceModel);
+async function runToolLoop(history, memoryFacts, systemOverride, forceModel, _isRetry, maxTokens) {
+  let response = await callClaude(history, memoryFacts, systemOverride, forceModel, maxTokens);
   let rounds = 0;
   let usedTools = false;
   while (response.stop_reason === 'tool_use' && rounds < 5) {
@@ -429,7 +471,7 @@ async function runToolLoop(history, memoryFacts, systemOverride, forceModel, _is
       toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
     }
     history.push({ role: 'user', content: toolResults });
-    response = await callClaude(history, memoryFacts, systemOverride, forceModel);
+    response = await callClaude(history, memoryFacts, systemOverride, forceModel, maxTokens);
   }
 
   // Safety net: if Claude ended without using tools but the request clearly needed action, retry with Sonnet
@@ -437,7 +479,7 @@ async function runToolLoop(history, memoryFacts, systemOverride, forceModel, _is
     var userText = getLatestUserText(history);
     if (requiresToolAction(userText)) {
       console.log('FALLBACK: Claude (' + (forceModel || 'auto') + ') skipped tools on action request, retrying with Sonnet — "' + userText.substring(0, 80) + '"');
-      return await runToolLoop(history, memoryFacts, systemOverride, SONNET_MODEL, true);
+      return await runToolLoop(history, memoryFacts, systemOverride, SONNET_MODEL, true, maxTokens);
     }
   }
 
@@ -518,7 +560,8 @@ async function handleMessage(chatId, userText, messageId) {
   if (history.length > 20) history = history.slice(-20);
   history.push({ role: 'user', content: userText });
 
-  const response = await runToolLoop(history, memoryFacts);
+  var tgMaxTokens = getTelegramMaxTokens(userText);
+  const response = await runToolLoop(history, memoryFacts, null, null, false, tgMaxTokens);
   const textBlock = response.content.find(function(b) { return b.type === 'text'; });
   const finalReply = textBlock ? textBlock.text : 'Done!';
   await saveMessage(chatId, 'user', userText);
@@ -659,6 +702,25 @@ cron.schedule('0 8 * * *', async function() {
   } catch (err) { console.error('Invoice alert error:', err.message); }
 });
 
+// Daily usage summary — midnight Maputo (22:00 UTC)
+cron.schedule('0 22 * * *', async function() {
+  try {
+    // Estimated cost: Haiku ~$0.001/call avg, Sonnet ~$0.015/call avg
+    var estimatedCost = (dailyUsage.haiku * 0.001) + (dailyUsage.sonnet * 0.015);
+    var dateStr = new Date().toISOString().split('T')[0];
+    console.log('Daily usage — Haiku calls: ' + dailyUsage.haiku + ', Sonnet calls: ' + dailyUsage.sonnet + ', estimated cost: $' + estimatedCost.toFixed(4));
+    await supabase.from('usage_logs').insert({
+      date: dateStr,
+      haiku_calls: dailyUsage.haiku,
+      sonnet_calls: dailyUsage.sonnet,
+      estimated_cost: estimatedCost
+    });
+    // Reset counters for next day
+    dailyUsage.haiku = 0;
+    dailyUsage.sonnet = 0;
+  } catch (err) { console.error('Usage log error:', err.message); }
+});
+
 // ========================= WHATSAPP =========================
 
 initWhatsApp({
@@ -673,9 +735,9 @@ initWhatsApp({
       // Keep only last 10 messages to prevent model confusion on long histories
       if (waHistory.length > 10) waHistory = waHistory.slice(-10);
       waHistory.push({ role: 'user', content: text });
-      // Force Sonnet for action requests — Haiku skips tool calls on long contexts
-      var model = requiresToolAction(text) ? SONNET_MODEL : null;
-      var response = await runToolLoop(waHistory, waMemory, null, model);
+      // Haiku by default, Sonnet only for email/calendar/drive/file/document/report/spreadsheet
+      var model = classifyWhatsApp(text);
+      var response = await runToolLoop(waHistory, waMemory, null, model, false, 800);
       var waText = response.content.find(function(b) { return b.type === 'text'; });
       var waReply = waText ? waText.text : 'Done!';
       await saveMessage('wa_' + from, 'user', text);
@@ -718,7 +780,7 @@ initWhatsApp({
 
       // If WA is off, log but don't auto-reply to anyone
       if (!getWaEnabled()) {
-        console.log('WhatsApp auto-reply is OFF - not replying to', senderNumber);
+        console.log('WhatsApp auto-reply OFF — blocked reply to:', senderNumber);
         return null;
       }
 
@@ -737,7 +799,7 @@ initWhatsApp({
       staffHistory.push({ role: 'user', content: text });
 
       var staffSystem = buildStaffPrompt(contactInfo.name, contactInfo.category, hasHistory);
-      var response = await callClaude(staffHistory, null, staffSystem, HAIKU_MODEL);
+      var response = await callClaude(staffHistory, null, staffSystem, HAIKU_MODEL, 800);
       var reply = response.content.find(function(b) { return b.type === 'text'; });
       if (reply) {
         // Save conversation history for continuity
@@ -811,8 +873,8 @@ initWhatsApp({
         var waMemory = await loadMemory();
         if (waHistory.length > 10) waHistory = waHistory.slice(-10);
         waHistory.push({ role: 'user', content: '[Voice message] ' + transcription.text });
-        var voiceModel = requiresToolAction(transcription.text) ? SONNET_MODEL : null;
-        var response = await runToolLoop(waHistory, waMemory, null, voiceModel);
+        var voiceModel = classifyWhatsApp(transcription.text);
+        var response = await runToolLoop(waHistory, waMemory, null, voiceModel, false, 800);
         var reply = response.content.find(function(b) { return b.type === 'text'; });
         var replyText = reply ? reply.text : 'Done!';
         await saveMessage('wa_258875254847@s.whatsapp.net', 'user', '[Voice] ' + transcription.text);
@@ -830,6 +892,9 @@ initWhatsApp({
           direction: 'incoming'
         });
         await sendTelegram(RABIH_CHAT_ID, 'Voice from *' + senderName + '* (' + senderNumber + '):\n\n' + transcription.text.substring(0, 500));
+        if (!getWaEnabled()) {
+          console.log('WhatsApp auto-reply OFF — blocked reply to:', from);
+        }
         return null;
       }
     } catch (err) {

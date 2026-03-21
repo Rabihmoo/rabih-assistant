@@ -17,6 +17,14 @@ let lastBadMacReset = Date.now();
 const sentMessages = new Set();
 const processedMessages = new Set();
 
+// WA toggle: read from disk so handler can enforce blocking at sendMessage level
+const WA_TOGGLE_FILE = (fs.existsSync('/data') ? '/data' : '/tmp') + '/wa_enabled';
+function isWaEnabled() {
+  try { return fs.readFileSync(WA_TOGGLE_FILE, 'utf8').trim() !== '0'; }
+  catch(e) { return true; }
+}
+const RABIH_NUMBER = '258875254847';
+
 // Use /data (Railway Volume) if available, fallback to /tmp
 const DATA_DIR = fs.existsSync('/data') ? '/data' : '/tmp';
 const QR_SENT_FILE = path.join(DATA_DIR, 'wa_qr_sent');
@@ -230,9 +238,15 @@ async function initWhatsApp(options) {
           isProcessing = true;
           try {
             var audioBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: logger, reuploadRequest: sock.updateMediaMessage });
-            var isFromRabih = from.includes('258875254847') || from.includes('@lid');
+            var isFromRabih = from.includes(RABIH_NUMBER) || msg.key.fromMe === true;
             var response = await onVoiceMessage(audioBuffer, audioMsg.mimetype || 'audio/ogg', from, isFromRabih);
             if (response && currentSock) {
+              // Block outgoing voice replies when WA is off and not Rabih
+              if (!isFromRabih && !isWaEnabled()) {
+                console.log('WhatsApp auto-reply OFF — blocked reply to:', from);
+                isProcessing = false;
+                return;
+              }
               var sent = await currentSock.sendMessage(from, { text: response });
               if (sent && sent.key && sent.key.id) {
                 sentMessages.add(sent.key.id);
@@ -259,7 +273,7 @@ async function initWhatsApp(options) {
           return;
         }
 
-        var isFromRabih = from.includes('258875254847') || from.includes('@lid');
+        var isFromRabih = from.includes(RABIH_NUMBER) || msg.key.fromMe === true;
         console.log('WhatsApp message from ' + from + ' (rabih:' + isFromRabih + '): ' + text.substring(0, 80));
 
         isProcessing = true;
@@ -282,6 +296,12 @@ async function initWhatsApp(options) {
             var senderNumber = from.replace('@s.whatsapp.net', '').replace('@lid', '');
             var reply = await onOtherMessage(text, senderNumber, from);
             if (reply && currentSock) {
+              // Safety net: block ALL outgoing replies when WA is off and not Rabih
+              if (!isWaEnabled()) {
+                console.log('WhatsApp auto-reply OFF — blocked reply to:', from);
+                isProcessing = false;
+                return;
+              }
               var sent = await currentSock.sendMessage(from, { text: reply });
               if (sent && sent.key && sent.key.id) {
                 sentMessages.add(sent.key.id);
@@ -299,7 +319,13 @@ async function initWhatsApp(options) {
         isProcessing = false;
         console.error('WhatsApp message error:', err.message);
         try {
-          if (currentSock && from) await currentSock.sendMessage(from, { text: 'Error: ' + err.message });
+          // Only send error messages to Rabih, never to others when WA is off
+          var errIsRabih = from && (from.includes(RABIH_NUMBER) || (msg && msg.key && msg.key.fromMe === true));
+          if (currentSock && from && (errIsRabih || isWaEnabled())) {
+            await currentSock.sendMessage(from, { text: 'Error: ' + err.message });
+          } else if (from) {
+            console.log('WhatsApp auto-reply OFF — blocked error reply to:', from);
+          }
         } catch(e) {}
       }
     });

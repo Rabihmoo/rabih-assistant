@@ -105,6 +105,16 @@ CREATE TABLE IF NOT EXISTS checklist_responses (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Daily API usage tracking
+CREATE TABLE IF NOT EXISTS usage_logs (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  date DATE NOT NULL,
+  haiku_calls INTEGER DEFAULT 0,
+  sonnet_calls INTEGER DEFAULT 0,
+  estimated_cost NUMERIC(10,4) DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts USING btree (name);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_run_at ON scheduled_tasks USING btree (run_at) WHERE done = false;
