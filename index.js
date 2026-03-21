@@ -848,6 +848,14 @@ initWhatsApp({
   // Rabih's own messages — full assistant (ALWAYS processed, even when /wa_off)
   onRabihMessage: async function(text, source, from) {
     try {
+      // Log Rabih's incoming message to whatsapp_logs
+      await supabase.from('whatsapp_logs').insert({
+        from_number: '258875254847',
+        from_name: 'Rabih',
+        message: text,
+        direction: 'incoming'
+      }).then(function() {}).catch(function(e) { console.error('WA log error:', e.message); });
+
       var waHistory = await loadHistory('wa_' + from);
       var waMemory = await loadMemory();
       // Keep only last 10 messages to prevent model confusion on long histories
@@ -861,6 +869,14 @@ initWhatsApp({
       var waReply = waText ? waText.text : 'Done!';
       await saveMessage('wa_' + from, 'user', text);
       await saveMessage('wa_' + from, 'assistant', waReply);
+      // Log outgoing reply to whatsapp_logs
+      await supabase.from('whatsapp_logs').insert({
+        from_number: '258875254847',
+        from_name: 'Assistant',
+        message: waReply,
+        direction: 'outgoing',
+        replied: true
+      }).catch(function(e) { console.error('WA log error:', e.message); });
       return waReply;
     } catch (err) {
       const errDetail = (err.response && err.response.data) ? JSON.stringify(err.response.data).substring(0, 300) : err.message;
@@ -906,7 +922,8 @@ initWhatsApp({
         from_number: senderNumber,
         from_name: senderName,
         message: text,
-        direction: 'incoming'
+        direction: 'incoming',
+        replied: false
       });
 
       // Notify Rabih on Telegram (always, even when WA is off — so you see incoming messages)
@@ -938,7 +955,8 @@ initWhatsApp({
           from_number: senderNumber,
           from_name: 'Assistant',
           message: reply.text,
-          direction: 'outgoing'
+          direction: 'outgoing',
+          replied: true
         });
 
         // Detect meeting requests and store as pending
@@ -1019,6 +1037,12 @@ initWhatsApp({
       console.log('Voice transcribed:', transcription.text.substring(0, 80));
 
       if (isFromRabih) {
+        // Log Rabih's voice message
+        await supabase.from('whatsapp_logs').insert({
+          from_number: '258875254847', from_name: 'Rabih',
+          message: '[Voice] ' + transcription.text, direction: 'incoming'
+        }).catch(function(e) { console.error('WA log error:', e.message); });
+
         // Always process Rabih's voice messages, even when /wa_off
         var waHistory = await loadHistory('wa_258875254847@s.whatsapp.net');
         var waMemory = await loadMemory();
@@ -1031,6 +1055,11 @@ initWhatsApp({
         var replyText = reply ? reply.text : 'Done!';
         await saveMessage('wa_258875254847@s.whatsapp.net', 'user', '[Voice] ' + transcription.text);
         await saveMessage('wa_258875254847@s.whatsapp.net', 'assistant', replyText);
+        // Log outgoing voice reply
+        await supabase.from('whatsapp_logs').insert({
+          from_number: '258875254847', from_name: 'Assistant',
+          message: replyText, direction: 'outgoing', replied: true
+        }).catch(function(e) { console.error('WA log error:', e.message); });
         return replyText;
       } else {
         // Voice from others — transcribe, log, notify
