@@ -18,12 +18,10 @@ let lastBadMacReset = Date.now();
 const sentMessages = new Set();
 const processedMessages = new Set();
 
-// WA toggle: read from disk so handler can enforce blocking at sendMessage level
-const WA_TOGGLE_FILE = (fs.existsSync('/data') ? '/data' : '/tmp') + '/wa_enabled';
-function isWaEnabled() {
-  try { return fs.readFileSync(WA_TOGGLE_FILE, 'utf8').trim() !== '0'; }
-  catch(e) { return true; }
-}
+// Human takeover: when Rabih manually replies to a contact, bot stays silent for 30 min
+const humanActive = {};
+const HUMAN_ACTIVE_DURATION = 30 * 60 * 1000; // 30 minutes
+
 const RABIH_NUMBER = '258875254847';
 
 // Use /data (Railway Volume) if available, fallback to /tmp
@@ -32,7 +30,6 @@ const QR_SENT_FILE = path.join(DATA_DIR, 'wa_qr_sent');
 const AUTH_FOLDER = path.join(DATA_DIR, 'baileys_auth');
 
 console.log('WhatsApp auth folder:', AUTH_FOLDER);
-console.log('WA_ENABLED STATE ON STARTUP:', isWaEnabled());
 
 function markQRSent() {
   try { fs.writeFileSync(QR_SENT_FILE, '1'); } catch(e) {}
@@ -220,13 +217,7 @@ async function initWhatsApp(options) {
           return;
         }
 
-        // ====== ABSOLUTE WA_OFF GATE — FIRST CHECK, BEFORE ANYTHING ELSE ======
         var isFromRabih = from.includes(RABIH_NUMBER) || msg.key.fromMe === true;
-        if (!isFromRabih && !isWaEnabled()) {
-          console.log('BLOCKED — WA auto-reply OFF, message from:', from);
-          return; // Full stop. No dedup, no processing, no history, no Claude, nothing.
-        }
-        // ======================================================================
 
         // Dedup checks
         if (processedMessages.has(messageId)) return;
@@ -237,6 +228,25 @@ async function initWhatsApp(options) {
           sentMessages.delete(messageId);
           return;
         }
+
+        // ====== HUMAN TAKEOVER DETECTION ======
+        // When Rabih manually sends a message (fromMe:true), mark that contact as human-active
+        if (msg.key.fromMe === true) {
+          humanActive[from] = Date.now();
+          console.log('Human takeover activated for', from, '— bot silent for 30 min');
+          return; // Don't generate bot reply when Rabih is manually talking
+        }
+        // If Rabih recently replied manually to this contact, bot stays silent
+        if (!isFromRabih && humanActive[from] && (Date.now() - humanActive[from] < HUMAN_ACTIVE_DURATION)) {
+          console.log('Human active for', from, '— bot staying silent');
+          return;
+        }
+        // Clean up expired flags periodically
+        if (!isFromRabih && humanActive[from] && (Date.now() - humanActive[from] >= HUMAN_ACTIVE_DURATION)) {
+          delete humanActive[from];
+          console.log('Human takeover expired for', from, '— bot resuming');
+        }
+        // ======================================
 
         // Prevent concurrent processing (with 90s safety timeout to prevent permanent lock)
         if (isProcessing) {

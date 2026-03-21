@@ -48,18 +48,16 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const PORT = process.env.PORT || 3000;
 const RABIH_CHAT_ID = '5140288064';
 
-// WhatsApp auto-reply toggle — persisted to disk so it survives redeploys
-const WA_TOGGLE_FILE = (require('fs').existsSync('/data') ? '/data' : '/tmp') + '/wa_enabled';
-function getWaEnabled() {
-  try { return require('fs').readFileSync(WA_TOGGLE_FILE, 'utf8').trim() !== '0'; }
-  catch(e) { return true; } // default ON if no file
-}
-function setWaEnabled(on) {
-  try { require('fs').writeFileSync(WA_TOGGLE_FILE, on ? '1' : '0'); }
-  catch(e) { console.error('Failed to persist WA toggle:', e.message); }
-}
-
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// WhatsApp auto-reply toggle — reads directly from Supabase every time (no file lag)
+async function getWaEnabled() {
+  try {
+    var { data } = await supabase.from('assistant_settings').select('value').eq('key', 'wa_enabled').limit(1).single();
+    if (data && data.value === 'false') return false;
+    return true; // default ON if no row
+  } catch(e) { return true; }
+}
 
 // ========================= MEMORY =========================
 
@@ -545,19 +543,18 @@ async function handleMessage(chatId, userText, messageId) {
     return;
   }
   if (userText.toLowerCase().trim() === '/wa_on') {
-    setWaEnabled(true);
     await supabase.from('assistant_settings').upsert({ key: 'wa_enabled', value: 'true', updated_at: new Date().toISOString() });
     await sendTelegram(chatId, 'WhatsApp auto-reply is now ON (all replies enabled).');
     return;
   }
   if (userText.toLowerCase().trim() === '/wa_off') {
-    setWaEnabled(false);
     await supabase.from('assistant_settings').upsert({ key: 'wa_enabled', value: 'false', updated_at: new Date().toISOString() });
     await sendTelegram(chatId, 'WhatsApp auto-reply is now OFF for others. Your own messages still work. Send /wa_on to re-enable.');
     return;
   }
   if (userText.toLowerCase().trim() === '/wa_status') {
-    await sendTelegram(chatId, 'WhatsApp auto-reply is currently ' + (getWaEnabled() ? 'ON' : 'OFF') + '.');
+    var waStatus = await getWaEnabled();
+    await sendTelegram(chatId, 'WhatsApp auto-reply is currently ' + (waStatus ? 'ON' : 'OFF') + '.');
     return;
   }
 
@@ -922,8 +919,9 @@ initWhatsApp({
       // Notify Rabih on Telegram (always, even when WA is off — so you see incoming messages)
       await sendTelegram(RABIH_CHAT_ID, '💬 WhatsApp from ' + senderName + ':\n' + text.substring(0, 500));
 
-      // If WA is off, log but don't auto-reply to anyone
-      if (!getWaEnabled()) {
+      // If WA is off, log but don't auto-reply to anyone (reads from Supabase, zero lag)
+      var waOn = await getWaEnabled();
+      if (!waOn) {
         console.log('WhatsApp auto-reply OFF — blocked reply to:', senderNumber);
         return null;
       }
@@ -1066,8 +1064,9 @@ initWhatsApp({
           direction: 'incoming'
         });
         await sendTelegram(RABIH_CHAT_ID, 'Voice from *' + senderName + '* (' + senderNumber + '):\n\n' + transcription.text.substring(0, 500));
-        if (!getWaEnabled()) {
-          console.log('WhatsApp auto-reply OFF — blocked reply to:', from);
+        var waOnVoice = await getWaEnabled();
+        if (!waOnVoice) {
+          console.log('WhatsApp auto-reply OFF — blocked voice reply to:', from);
         }
         return null;
       }
@@ -1203,7 +1202,7 @@ app.get('/dashboard-stats', async function(req, res) {
       pending_meetings: meetRes.count || 0,
       tasks_due_today: taskRes.count || 0,
       cost_today: costToday,
-      wa_enabled: getWaEnabled(),
+      wa_enabled: await getWaEnabled(),
       bot_status: 'online'
     });
   } catch (err) {
@@ -1287,8 +1286,6 @@ app.post('/confirm-meeting', async function(req, res) {
 app.post('/wa-toggle', async function(req, res) {
   try {
     var enabled = req.body.enabled;
-    setWaEnabled(enabled);
-    // Also sync to Supabase for dashboard reads
     await supabase.from('assistant_settings').upsert({ key: 'wa_enabled', value: String(enabled), updated_at: new Date().toISOString() });
     console.log('WA toggled from dashboard:', enabled);
     res.json({ success: true, wa_enabled: enabled });
