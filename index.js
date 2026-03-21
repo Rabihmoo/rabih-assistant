@@ -489,36 +489,112 @@ async function handleMessage(chatId, userText, messageId) {
     return;
   }
 
-  // Meeting confirmation: "YES 258..." or "NO 258..." replies from Rabih
-  var meetingMatch = userText.trim().match(/^(yes|no)\s+(\d+)/i);
+  // Meeting confirmation: "YES", "NO", "YES 258...", or "NO 258..." replies from Rabih
+  var meetingMatch = userText.trim().match(/^(yes|no)(?:\s+(\d+))?$/i);
   if (meetingMatch) {
     var meetingAction = meetingMatch[1].toLowerCase();
-    var meetingNumber = meetingMatch[2];
+    var meetingNumber = meetingMatch[2] || null;
     try {
-      var { data: pending } = await supabase.from('pending_meetings')
-        .select('*').eq('status', 'waiting').eq('requester_number', meetingNumber).limit(1);
+      var pending;
+      if (meetingNumber) {
+        // Number specified — look up that specific contact
+        var res = await supabase.from('pending_meetings')
+          .select('*').eq('status', 'waiting').eq('requester_number', meetingNumber).limit(1);
+        pending = res.data;
+      } else {
+        // No number — grab all waiting meetings
+        var res = await supabase.from('pending_meetings')
+          .select('*').eq('status', 'waiting').order('created_at', { ascending: false });
+        pending = res.data;
+        if (pending && pending.length > 1) {
+          var list = pending.map(function(m, i) {
+            return (i+1) + '. ' + (m.requester_name || m.requester_number) + ' (' + m.requester_number + '): ' + (m.message || '').substring(0, 80);
+          }).join('\n');
+          await sendTelegram(chatId, 'Multiple pending meetings — reply with the number:\n\n' + list + '\n\nExample: YES ' + pending[0].requester_number);
+          return;
+        }
+      }
       if (pending && pending.length > 0) {
         var meeting = pending[0];
         var meetingLabel = meeting.requester_name || meeting.requester_number;
         if (meetingAction === 'yes') {
           await supabase.from('pending_meetings').update({ status: 'confirmed' }).eq('id', meeting.id);
+
+          // Extract date/time from the meeting message using Haiku
+          var dateInfo = { date: '', time: '' };
+          try {
+            var now = new Date();
+            var todayStr = now.toISOString().split('T')[0];
+            var extractRes = await axios.post('https://api.anthropic.com/v1/messages', {
+              model: HAIKU_MODEL, max_tokens: 100,
+              system: 'Extract the meeting date and time from this message. Today is ' + todayStr + '. If "tomorrow" is mentioned, calculate the actual date. Return ONLY a JSON object: {"date":"YYYY-MM-DD","time":"HH:MM"}. If no specific date/time mentioned, use {"date":"","time":""}. No other text.',
+              messages: [{ role: 'user', content: meeting.message }]
+            }, { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 15000 });
+            trackUsage(HAIKU_MODEL);
+            var extractText = extractRes.data.content[0].text.trim();
+            var jsonMatch = extractText.match(/\{[^}]+\}/);
+            if (jsonMatch) dateInfo = JSON.parse(jsonMatch[0]);
+          } catch (extractErr) {
+            console.error('Date extraction error:', extractErr.message);
+          }
+
+          // Build WhatsApp confirmation message
+          var waConfirmMsg = 'Rabih confirmed';
+          if (dateInfo.date && dateInfo.time) {
+            waConfirmMsg += ' — see you ' + dateInfo.date + ' at ' + dateInfo.time + '. Looking forward to it!';
+          } else if (dateInfo.date) {
+            waConfirmMsg += ' — see you on ' + dateInfo.date + '. Looking forward to it!';
+          } else {
+            waConfirmMsg += '! He\'ll be in touch with you shortly to set the time.';
+          }
           await handleCommunicationTool('send_whatsapp_message', {
             phone_number: meeting.requester_number,
-            message: 'Good news — Rabih confirmed! He\'ll be in touch with you shortly.'
+            message: waConfirmMsg
           });
-          await sendTelegram(chatId, 'Meeting confirmed. WhatsApp sent to ' + meetingLabel + '.');
+
+          // Create Google Calendar event if we have date/time
+          var calendarNote = '';
+          if (dateInfo.date && dateInfo.time) {
+            try {
+              await handleCalendarTool('create_calendar_event', {
+                title: 'Meeting with ' + meetingLabel,
+                date: dateInfo.date,
+                time: dateInfo.time,
+                duration_minutes: 60
+              });
+              calendarNote = ' Calendar event created.';
+            } catch (calErr) {
+              console.error('Calendar create error:', calErr.message);
+              calendarNote = ' (Calendar event failed: ' + calErr.message + ')';
+            }
+          }
+
+          // Confirm back to Rabih on Telegram
+          var tgConfirm = 'Done ✅ Meeting confirmed with ' + meetingLabel;
+          if (dateInfo.date && dateInfo.time) {
+            tgConfirm += ' on ' + dateInfo.date + ' at ' + dateInfo.time + '.';
+          } else if (dateInfo.date) {
+            tgConfirm += ' on ' + dateInfo.date + '.';
+          } else {
+            tgConfirm += '.';
+          }
+          tgConfirm += calendarNote;
+          await sendTelegram(chatId, tgConfirm);
         } else {
           await supabase.from('pending_meetings').update({ status: 'declined' }).eq('id', meeting.id);
           await handleCommunicationTool('send_whatsapp_message', {
             phone_number: meeting.requester_number,
-            message: 'Thanks for reaching out — unfortunately Rabih isn\'t available for this. Feel free to leave a message and we\'ll get back to you if anything changes.'
+            message: 'Unfortunately Rabih is not available at that time. Feel free to suggest another time.'
           });
           await sendTelegram(chatId, 'Meeting declined. Polite decline sent to ' + meetingLabel + '.');
         }
         return;
       } else {
-        await sendTelegram(chatId, 'No pending meeting found for ' + meetingNumber + '.');
-        return;
+        if (meetingNumber) {
+          await sendTelegram(chatId, 'No pending meeting found for ' + meetingNumber + '.');
+          return;
+        }
+        // No pending meetings — fall through to normal message handling
       }
     } catch (meetErr) {
       console.error('Meeting confirm/decline error:', meetErr.message);
