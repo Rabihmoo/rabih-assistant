@@ -489,35 +489,40 @@ async function handleMessage(chatId, userText, messageId) {
     return;
   }
 
-  // Meeting confirmation: YES or NO replies from Rabih
-  var trimmedLower = userText.trim().toLowerCase();
-  if (trimmedLower === 'yes' || trimmedLower === 'no') {
+  // Meeting confirmation: "YES 258..." or "NO 258..." replies from Rabih
+  var meetingMatch = userText.trim().match(/^(yes|no)\s+(\d+)/i);
+  if (meetingMatch) {
+    var meetingAction = meetingMatch[1].toLowerCase();
+    var meetingNumber = meetingMatch[2];
     try {
       var { data: pending } = await supabase.from('pending_meetings')
-        .select('*').eq('status', 'waiting').order('created_at', { ascending: false }).limit(1);
+        .select('*').eq('status', 'waiting').eq('requester_number', meetingNumber).limit(1);
       if (pending && pending.length > 0) {
         var meeting = pending[0];
-        if (trimmedLower === 'yes') {
+        var meetingLabel = meeting.requester_name || meeting.requester_number;
+        if (meetingAction === 'yes') {
           await supabase.from('pending_meetings').update({ status: 'confirmed' }).eq('id', meeting.id);
           await handleCommunicationTool('send_whatsapp_message', {
             phone_number: meeting.requester_number,
             message: 'Good news — Rabih confirmed! He\'ll be in touch with you shortly.'
           });
-          await sendTelegram(chatId, 'Meeting confirmed. WhatsApp sent to ' + (meeting.requester_name || meeting.requester_number) + '.');
+          await sendTelegram(chatId, 'Meeting confirmed. WhatsApp sent to ' + meetingLabel + '.');
         } else {
           await supabase.from('pending_meetings').update({ status: 'declined' }).eq('id', meeting.id);
           await handleCommunicationTool('send_whatsapp_message', {
             phone_number: meeting.requester_number,
             message: 'Thanks for reaching out — unfortunately Rabih isn\'t available for this. Feel free to leave a message and we\'ll get back to you if anything changes.'
           });
-          await sendTelegram(chatId, 'Meeting declined. Polite decline sent to ' + (meeting.requester_name || meeting.requester_number) + '.');
+          await sendTelegram(chatId, 'Meeting declined. Polite decline sent to ' + meetingLabel + '.');
         }
+        return;
+      } else {
+        await sendTelegram(chatId, 'No pending meeting found for ' + meetingNumber + '.');
         return;
       }
     } catch (meetErr) {
       console.error('Meeting confirm/decline error:', meetErr.message);
     }
-    // If no pending meeting, fall through to normal message handling
   }
   if (userText.toLowerCase().trim() === '/wa_qr') {
     forceNewQR();
@@ -771,7 +776,7 @@ initWhatsApp({
       });
 
       // Notify Rabih on Telegram (always, even when WA is off — so you see incoming messages)
-      await sendTelegram(RABIH_CHAT_ID, 'WhatsApp from *' + senderName + '* (' + senderNumber + '):\n\n' + text.substring(0, 500));
+      await sendTelegram(RABIH_CHAT_ID, '💬 WhatsApp from ' + senderName + ':\n' + text.substring(0, 500));
 
       // If WA is off, log but don't auto-reply to anyone
       if (!getWaEnabled()) {
@@ -816,10 +821,11 @@ initWhatsApp({
               status: 'waiting'
             });
             await sendTelegram(RABIH_CHAT_ID,
-              'MEETING REQUEST\n' +
-              'From: ' + meetingName + ' (' + senderNumber + ')\n' +
-              'Wants: ' + text.substring(0, 300) + '\n\n' +
-              'Reply YES to confirm or NO to decline.'
+              '📅 MEETING REQUEST\n' +
+              'From: ' + meetingName + '\n' +
+              'Wants: ' + text.substring(0, 300) + '\n' +
+              'Their WhatsApp: ' + senderNumber + '\n\n' +
+              'Reply YES ' + senderNumber + ' to confirm or NO ' + senderNumber + ' to decline'
             );
           } catch (meetErr) {
             console.error('Failed to save pending meeting:', meetErr.message);
@@ -833,7 +839,7 @@ initWhatsApp({
         if (promisedToNotify && !isMeetingRequest) {
           // Don't duplicate — meeting requests already notify above
           await sendTelegram(RABIH_CHAT_ID,
-            'Message for you from *' + ((contactInfo && contactInfo.name) || senderNumber) + '* (' + senderNumber + '):\n\n' +
+            '💬 Message for you from ' + ((contactInfo && contactInfo.name) || senderNumber) + ':\n' +
             text.substring(0, 500) + '\n\n' +
             '_The assistant told them you\'d be informed._'
           ).catch(function(e) { console.error('Failed to notify Rabih about passed message:', e.message); });
