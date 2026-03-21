@@ -125,6 +125,23 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Assistant settings (key-value store for dashboard controls)
+CREATE TABLE IF NOT EXISTS assistant_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT DEFAULT '',
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Default settings
+INSERT INTO assistant_settings (key, value) VALUES
+  ('wa_enabled', 'true'),
+  ('reply_hours_from', '08:00'),
+  ('reply_hours_to', '23:00'),
+  ('privacy_mode', 'true'),
+  ('notify_all', 'true'),
+  ('notify_meetings_only', 'false')
+ON CONFLICT (key) DO NOTHING;
+
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts USING btree (name);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_run_at ON scheduled_tasks USING btree (run_at) WHERE done = false;

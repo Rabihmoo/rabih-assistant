@@ -1,0 +1,1707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Rabih Assistant</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0A0A0F;
+  --card: #13131A;
+  --card-hover: #1A1A24;
+  --accent: #6C63FF;
+  --accent-hover: #5A52E0;
+  --text: #FFFFFF;
+  --text-muted: #A0A0B0;
+  --text-dim: #606070;
+  --border: #1E1E2A;
+  --green: #22C55E;
+  --red: #EF4444;
+  --orange: #F59E0B;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.3);
+  --nav-height: 64px;
+  --sidebar-width: 240px;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* Sidebar — desktop */
+.sidebar {
+  display: none;
+  position: fixed;
+  left: 0; top: 0;
+  width: var(--sidebar-width);
+  height: 100vh;
+  background: var(--card);
+  border-right: 1px solid var(--border);
+  padding: 24px 0;
+  z-index: 100;
+  flex-direction: column;
+}
+.sidebar-brand {
+  padding: 0 24px 24px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.sidebar-brand h1 {
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sidebar-nav { flex: 1; padding: 8px 12px; }
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 2px;
+  user-select: none;
+}
+.sidebar-nav-item:hover { background: var(--card-hover); color: var(--text); }
+.sidebar-nav-item.active { background: var(--accent); color: #fff; }
+.sidebar-nav-item span.icon { font-size: 18px; width: 24px; text-align: center; }
+
+/* Bottom nav — mobile */
+.bottom-nav {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: var(--nav-height);
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  z-index: 100;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.bottom-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  color: var(--text-dim);
+  transition: color 0.2s;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 6px 12px;
+  user-select: none;
+}
+.bottom-nav-item .icon { font-size: 22px; }
+.bottom-nav-item.active { color: var(--accent); }
+.bottom-nav-item:hover { color: var(--text-muted); }
+
+/* Main content */
+.main {
+  padding: 20px 16px calc(var(--nav-height) + 20px);
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+/* Pages */
+.page { display: none; animation: fadeIn 0.3s ease; }
+.page.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Page header */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+.page-header h2 {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+/* Status dot */
+.status-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.status-dot.online { background: var(--green); box-shadow: 0 0 8px rgba(34,197,94,0.5); }
+.status-dot.offline { background: var(--red); box-shadow: 0 0 8px rgba(239,68,68,0.5); }
+
+/* Cards */
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+/* Stats grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.stat-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 16px;
+  text-align: center;
+}
+.stat-card .stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.stat-card .stat-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Toggle switch */
+.toggle-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: var(--card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.toggle-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+.toggle-sublabel {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.toggle {
+  position: relative;
+  width: 52px; height: 28px;
+  cursor: pointer;
+}
+.toggle input { display: none; }
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: #333;
+  border-radius: 14px;
+  transition: background 0.3s;
+}
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 22px; height: 22px;
+  left: 3px; top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.3s;
+}
+.toggle input:checked + .toggle-slider { background: var(--green); }
+.toggle input:checked + .toggle-slider::before { transform: translateX(24px); }
+
+/* Big WA toggle */
+.wa-toggle-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px;
+  background: var(--card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+.wa-toggle-card .wa-status {
+  font-size: 16px;
+  font-weight: 700;
+}
+.wa-toggle-card .wa-status.on { color: var(--green); }
+.wa-toggle-card .wa-status.off { color: var(--red); }
+.big-toggle {
+  position: relative;
+  width: 64px; height: 34px;
+  cursor: pointer;
+}
+.big-toggle input { display: none; }
+.big-toggle .toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--red);
+  border-radius: 17px;
+  transition: background 0.3s;
+}
+.big-toggle .toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 28px; height: 28px;
+  left: 3px; top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.3s;
+}
+.big-toggle input:checked + .toggle-slider { background: var(--green); }
+.big-toggle input:checked + .toggle-slider::before { transform: translateX(30px); }
+
+/* Activity list */
+.activity-list { list-style: none; }
+.activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.activity-item:last-child { border-bottom: none; }
+.activity-dir {
+  font-size: 18px;
+  width: 32px; height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.activity-dir.incoming { background: rgba(108,99,255,0.15); }
+.activity-dir.outgoing { background: rgba(34,197,94,0.15); }
+.activity-content { flex: 1; min-width: 0; }
+.activity-name { font-size: 13px; font-weight: 600; }
+.activity-msg {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+.activity-time { font-size: 11px; color: var(--text-dim); flex-shrink: 0; margin-top: 2px; }
+
+/* Search bar */
+.search-bar {
+  position: relative;
+  margin-bottom: 16px;
+}
+.search-bar input {
+  width: 100%;
+  padding: 12px 16px 12px 40px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.search-bar input:focus { border-color: var(--accent); }
+.search-bar .search-icon {
+  position: absolute;
+  left: 14px; top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-dim);
+  font-size: 16px;
+}
+
+/* Contact / item list */
+.list-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  transition: background 0.2s;
+}
+.list-item:hover { background: var(--card-hover); }
+.list-item-info { flex: 1; min-width: 0; }
+.list-item-name { font-size: 14px; font-weight: 600; }
+.list-item-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.list-item-actions { display: flex; gap: 6px; }
+
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.badge-staff { background: rgba(108,99,255,0.2); color: var(--accent); }
+.badge-business { background: rgba(34,197,94,0.2); color: var(--green); }
+.badge-supplier { background: rgba(245,158,11,0.2); color: var(--orange); }
+.badge-general { background: rgba(160,160,176,0.2); color: var(--text-muted); }
+.badge-high { background: rgba(239,68,68,0.2); color: var(--red); }
+.badge-medium { background: rgba(245,158,11,0.2); color: var(--orange); }
+.badge-low { background: rgba(34,197,94,0.2); color: var(--green); }
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.btn-green { background: var(--green); color: #fff; }
+.btn-green:hover:not(:disabled) { background: #1aaa4a; }
+.btn-red { background: var(--red); color: #fff; }
+.btn-red:hover:not(:disabled) { background: #dc2626; }
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  padding: 6px 10px;
+}
+.btn-ghost:hover { color: var(--text); background: var(--card-hover); }
+.btn-sm { padding: 6px 12px; font-size: 12px; }
+.btn-icon {
+  width: 32px; height: 32px;
+  padding: 0;
+  border-radius: 8px;
+}
+
+/* FAB */
+.fab {
+  position: fixed;
+  bottom: calc(var(--nav-height) + 20px);
+  right: 20px;
+  width: 56px; height: 56px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  font-size: 28px;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(108,99,255,0.4);
+  transition: transform 0.2s, background 0.2s;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fab:hover { transform: scale(1.1); background: var(--accent-hover); }
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 200;
+  animation: fadeIn 0.2s ease;
+  padding: 16px;
+}
+.modal {
+  background: var(--card);
+  border-radius: 16px 16px 0 0;
+  width: 100%;
+  max-width: 480px;
+  max-height: 85vh;
+  overflow-y: auto;
+  animation: slideUp 0.3s ease;
+  border: 1px solid var(--border);
+}
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 20px 0;
+}
+.modal-header h3 { font-size: 18px; font-weight: 700; }
+.modal-body { padding: 20px; }
+.modal-footer {
+  padding: 0 20px 20px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* Form */
+.form-group { margin-bottom: 16px; }
+.form-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.form-control {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.form-control:focus { border-color: var(--accent); }
+select.form-control { appearance: none; cursor: pointer; }
+textarea.form-control { resize: vertical; min-height: 80px; }
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 4px;
+  margin-bottom: 16px;
+}
+.tab {
+  flex: 1;
+  padding: 10px;
+  text-align: center;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+  border: none;
+  background: none;
+  font-family: inherit;
+}
+.tab.active { background: var(--accent); color: #fff; }
+.tab:hover:not(.active) { color: var(--text); }
+
+/* Meeting card */
+.meeting-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.meeting-card .mc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.meeting-card .mc-name { font-size: 15px; font-weight: 600; }
+.meeting-card .mc-time { font-size: 11px; color: var(--text-dim); }
+.meeting-card .mc-msg {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  line-height: 1.5;
+}
+.meeting-card .mc-phone { font-size: 12px; color: var(--text-dim); margin-bottom: 12px; }
+.meeting-card .mc-actions { display: flex; gap: 8px; }
+.meeting-card.confirmed { border-left: 3px solid var(--green); }
+.meeting-card.declined { border-left: 3px solid var(--red); }
+
+/* Task card */
+.task-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+}
+.task-card.done { opacity: 0.5; }
+.task-checkbox {
+  width: 22px; height: 22px;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+  transition: all 0.2s;
+  background: transparent;
+}
+.task-checkbox.checked { background: var(--accent); border-color: var(--accent); }
+.task-checkbox.checked::after { content: '\2713'; color: #fff; font-size: 14px; font-weight: 700; }
+.task-info { flex: 1; min-width: 0; }
+.task-title { font-size: 14px; font-weight: 600; }
+.task-card.done .task-title { text-decoration: line-through; }
+.task-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.task-due { font-size: 11px; color: var(--text-dim); }
+
+/* Settings section */
+.settings-section {
+  margin-bottom: 24px;
+}
+.settings-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  margin-bottom: -1px;
+}
+.settings-row:first-of-type { border-radius: var(--radius) var(--radius) 0 0; }
+.settings-row:last-of-type { border-radius: 0 0 var(--radius) var(--radius); margin-bottom: 0; }
+.settings-row:only-of-type { border-radius: var(--radius); }
+.settings-row-label { font-size: 14px; font-weight: 500; }
+.time-inputs { display: flex; align-items: center; gap: 8px; }
+.time-inputs input {
+  width: 80px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  text-align: center;
+  outline: none;
+}
+.time-inputs input:focus { border-color: var(--accent); }
+.time-inputs span { color: var(--text-dim); font-size: 12px; }
+
+/* Danger zone */
+.danger-zone .btn {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+/* Toast */
+.toast-container {
+  position: fixed;
+  bottom: calc(var(--nav-height) + 16px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+.toast {
+  padding: 12px 20px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+  pointer-events: auto;
+  max-width: 340px;
+  text-align: center;
+}
+.toast-success { background: var(--green); color: #fff; }
+.toast-error { background: var(--red); color: #fff; }
+.toast-info { background: var(--accent); color: #fff; }
+@keyframes toastIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateY(-8px); } }
+
+/* Skeleton */
+.skeleton {
+  background: linear-gradient(90deg, var(--card) 25%, var(--card-hover) 50%, var(--card) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.skeleton-text { height: 14px; margin-bottom: 8px; width: 80%; }
+.skeleton-title { height: 20px; margin-bottom: 12px; width: 60%; }
+.skeleton-card { height: 80px; margin-bottom: 12px; border-radius: var(--radius); }
+.skeleton-stat { height: 90px; border-radius: var(--radius); }
+
+/* Spinner */
+.spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-dim);
+}
+.empty-state .empty-icon { font-size: 48px; margin-bottom: 12px; }
+.empty-state p { font-size: 14px; }
+
+/* Desktop */
+@media (min-width: 769px) {
+  .sidebar { display: flex; }
+  .bottom-nav { display: none; }
+  .main {
+    margin-left: var(--sidebar-width);
+    padding: 32px 40px;
+    max-width: calc(900px + var(--sidebar-width));
+  }
+  .fab { bottom: 24px; right: 40px; }
+  .modal-overlay { align-items: center; }
+  .modal { border-radius: 16px; }
+  .toast-container { bottom: 24px; }
+}
+
+@media (min-width: 1024px) {
+  .stats-grid { grid-template-columns: repeat(4, 1fr); }
+}
+</style>
+</head>
+<body>
+
+<!-- Sidebar (desktop) -->
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <h1>Rabih Assistant <span class="status-dot offline" id="statusDotSidebar"></span></h1>
+  </div>
+  <div class="sidebar-nav">
+    <div class="sidebar-nav-item active" data-page="dashboard">
+      <span class="icon">&#x1F4CA;</span> Dashboard
+    </div>
+    <div class="sidebar-nav-item" data-page="contacts">
+      <span class="icon">&#x1F464;</span> Contacts
+    </div>
+    <div class="sidebar-nav-item" data-page="meetings">
+      <span class="icon">&#x1F4C5;</span> Meetings
+    </div>
+    <div class="sidebar-nav-item" data-page="tasks">
+      <span class="icon">&#x2705;</span> Tasks
+    </div>
+    <div class="sidebar-nav-item" data-page="settings">
+      <span class="icon">&#x2699;</span> Settings
+    </div>
+  </div>
+</nav>
+
+<!-- Bottom nav (mobile) -->
+<nav class="bottom-nav" id="bottomNav">
+  <div class="bottom-nav-item active" data-page="dashboard">
+    <span class="icon">&#x1F4CA;</span>
+    <span>Dashboard</span>
+  </div>
+  <div class="bottom-nav-item" data-page="contacts">
+    <span class="icon">&#x1F464;</span>
+    <span>Contacts</span>
+  </div>
+  <div class="bottom-nav-item" data-page="meetings">
+    <span class="icon">&#x1F4C5;</span>
+    <span>Meetings</span>
+  </div>
+  <div class="bottom-nav-item" data-page="tasks">
+    <span class="icon">&#x2705;</span>
+    <span>Tasks</span>
+  </div>
+  <div class="bottom-nav-item" data-page="settings">
+    <span class="icon">&#x2699;</span>
+    <span>Settings</span>
+  </div>
+</nav>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Main content -->
+<div class="main">
+
+  <!-- PAGE: DASHBOARD -->
+  <div class="page active" id="page-dashboard">
+    <div class="page-header">
+      <h2>Dashboard <span class="status-dot offline" id="statusDotMain"></span></h2>
+    </div>
+
+    <!-- WA Toggle -->
+    <div class="wa-toggle-card">
+      <div>
+        <div class="wa-status off" id="waStatusLabel">WhatsApp OFF</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:2px">Auto-reply status</div>
+      </div>
+      <label class="big-toggle">
+        <input type="checkbox" id="waToggleDash" onchange="toggleWA(this.checked)">
+        <div class="toggle-slider"></div>
+      </label>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card"><div class="skeleton skeleton-stat"></div></div>
+      <div class="stat-card"><div class="skeleton skeleton-stat"></div></div>
+      <div class="stat-card"><div class="skeleton skeleton-stat"></div></div>
+      <div class="stat-card"><div class="skeleton skeleton-stat"></div></div>
+    </div>
+
+    <!-- Cost card -->
+    <div class="card" id="costCard">
+      <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Today's Cost</div>
+      <div style="font-size:24px;font-weight:700;color:var(--accent)" id="costValue">--</div>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:4px" id="costBreakdown"></div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="card">
+      <div style="font-size:14px;font-weight:700;margin-bottom:12px">Recent Activity</div>
+      <ul class="activity-list" id="activityList">
+        <div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div>
+      </ul>
+    </div>
+  </div>
+
+  <!-- PAGE: CONTACTS -->
+  <div class="page" id="page-contacts">
+    <div class="page-header">
+      <h2>Contacts</h2>
+    </div>
+    <div class="search-bar">
+      <span class="search-icon">&#x1F50D;</span>
+      <input type="text" id="contactSearch" placeholder="Search contacts..." oninput="filterContacts(this.value)">
+    </div>
+    <div id="contactsList">
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+    </div>
+    <button class="fab" id="fabContacts" onclick="openContactModal()">+</button>
+  </div>
+
+  <!-- PAGE: MEETINGS -->
+  <div class="page" id="page-meetings">
+    <div class="page-header">
+      <h2>Meetings</h2>
+    </div>
+    <div class="tabs">
+      <button class="tab active" onclick="setMeetingTab('pending', this)">Pending</button>
+      <button class="tab" onclick="setMeetingTab('history', this)">History</button>
+    </div>
+    <div id="meetingsList">
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+    </div>
+  </div>
+
+  <!-- PAGE: TASKS -->
+  <div class="page" id="page-tasks">
+    <div class="page-header">
+      <h2>Tasks</h2>
+    </div>
+    <div class="tabs">
+      <button class="tab active" onclick="setTaskTab('all', this)">All</button>
+      <button class="tab" onclick="setTaskTab('pending', this)">Pending</button>
+      <button class="tab" onclick="setTaskTab('done', this)">Done</button>
+    </div>
+    <div id="tasksList">
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+    </div>
+    <button class="fab" id="fabTasks" onclick="openTaskModal()">+</button>
+  </div>
+
+  <!-- PAGE: SETTINGS -->
+  <div class="page" id="page-settings">
+    <div class="page-header">
+      <h2>Settings</h2>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">WhatsApp Settings</div>
+      <div class="settings-row" style="border-radius:var(--radius) var(--radius) 0 0">
+        <span class="settings-row-label">Auto-Reply</span>
+        <label class="toggle">
+          <input type="checkbox" id="waToggleSettings" onchange="toggleWA(this.checked)">
+          <div class="toggle-slider"></div>
+        </label>
+      </div>
+      <div class="settings-row">
+        <span class="settings-row-label">Reply Hours</span>
+        <div class="time-inputs">
+          <input type="time" id="replyFrom" value="08:00" onchange="saveSetting('reply_hours_from', this.value)">
+          <span>to</span>
+          <input type="time" id="replyTo" value="22:00" onchange="saveSetting('reply_hours_to', this.value)">
+        </div>
+      </div>
+      <div class="settings-row" style="border-radius:0 0 var(--radius) var(--radius)">
+        <span class="settings-row-label">Privacy Mode</span>
+        <label class="toggle">
+          <input type="checkbox" id="privacyToggle" onchange="saveSetting('privacy_mode', this.checked ? 'true' : 'false')">
+          <div class="toggle-slider"></div>
+        </label>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Notifications</div>
+      <div class="settings-row" style="border-radius:var(--radius) var(--radius) 0 0">
+        <span class="settings-row-label">Notify All Messages</span>
+        <label class="toggle">
+          <input type="checkbox" id="notifyAllToggle" onchange="saveSetting('notify_all', this.checked ? 'true' : 'false')">
+          <div class="toggle-slider"></div>
+        </label>
+      </div>
+      <div class="settings-row" style="border-radius:0 0 var(--radius) var(--radius)">
+        <span class="settings-row-label">Notify Meetings Only</span>
+        <label class="toggle">
+          <input type="checkbox" id="notifyMeetingsToggle" onchange="saveSetting('notify_meetings_only', this.checked ? 'true' : 'false')">
+          <div class="toggle-slider"></div>
+        </label>
+      </div>
+    </div>
+
+    <div class="settings-section danger-zone">
+      <div class="settings-section-title" style="color:var(--red)">Danger Zone</div>
+      <button class="btn btn-red" onclick="clearWAHistory()">Clear WhatsApp History</button>
+      <button class="btn btn-red" onclick="clearAllTasks()">Clear All Tasks</button>
+    </div>
+  </div>
+</div>
+
+<!-- Contact Modal -->
+<div class="modal-overlay" id="contactModal" style="display:none" onclick="if(event.target===this)closeModal('contactModal')">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="contactModalTitle">Add Contact</h3>
+      <button class="btn btn-ghost btn-icon" onclick="closeModal('contactModal')">&#x2715;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="contactId">
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" class="form-control" id="contactName" placeholder="Full name">
+      </div>
+      <div class="form-group">
+        <label>Phone</label>
+        <input type="tel" class="form-control" id="contactPhone" placeholder="+961 ...">
+      </div>
+      <div class="form-group">
+        <label>WhatsApp</label>
+        <input type="tel" class="form-control" id="contactWhatsapp" placeholder="WhatsApp number">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" class="form-control" id="contactEmail" placeholder="email@example.com">
+      </div>
+      <div class="form-group">
+        <label>Category</label>
+        <select class="form-control" id="contactCategory">
+          <option value="general">General</option>
+          <option value="staff">Staff</option>
+          <option value="business">Business</option>
+          <option value="supplier">Supplier</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <textarea class="form-control" id="contactNotes" placeholder="Any notes..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('contactModal')">Cancel</button>
+      <button class="btn btn-primary" id="contactSaveBtn" onclick="saveContact()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Task Modal -->
+<div class="modal-overlay" id="taskModal" style="display:none" onclick="if(event.target===this)closeModal('taskModal')">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="taskModalTitle">Add Task</h3>
+      <button class="btn btn-ghost btn-icon" onclick="closeModal('taskModal')">&#x2715;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="taskId">
+      <div class="form-group">
+        <label>Title</label>
+        <input type="text" class="form-control" id="taskTitle" placeholder="Task title">
+      </div>
+      <div class="form-group">
+        <label>Priority</label>
+        <select class="form-control" id="taskPriority">
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Due Date</label>
+        <input type="date" class="form-control" id="taskDueDate">
+      </div>
+      <div class="form-group">
+        <label>Category</label>
+        <input type="text" class="form-control" id="taskCategory" placeholder="e.g. work, personal">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('taskModal')">Cancel</button>
+      <button class="btn btn-primary" id="taskSaveBtn" onclick="saveTask()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// CONFIGURATION — fill these in
+// ============================================================
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_KEY = 'YOUR_SUPABASE_ANON_KEY';
+const API_BASE = 'https://rabih-assistant-production.up.railway.app';
+
+// ============================================================
+// SUPABASE INIT
+// ============================================================
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ============================================================
+// STATE
+// ============================================================
+let allContacts = [];
+let allTasks = [];
+let currentMeetingTab = 'pending';
+let currentTaskTab = 'all';
+let serverOnline = false;
+
+// ============================================================
+// NAVIGATION
+// ============================================================
+function navigateTo(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.sidebar-nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.bottom-nav-item').forEach(n => n.classList.remove('active'));
+
+  const el = document.getElementById('page-' + page);
+  if (el) el.classList.add('active');
+
+  document.querySelectorAll(`[data-page="${page}"]`).forEach(n => n.classList.add('active'));
+
+  // Show/hide FABs
+  document.getElementById('fabContacts').style.display = page === 'contacts' ? 'flex' : 'none';
+  document.getElementById('fabTasks').style.display = page === 'tasks' ? 'flex' : 'none';
+
+  localStorage.setItem('rabih_active_page', page);
+
+  // Load data on page visit
+  if (page === 'dashboard') loadDashboard();
+  if (page === 'contacts') loadContacts();
+  if (page === 'meetings') loadMeetings();
+  if (page === 'tasks') loadTasks();
+  if (page === 'settings') loadSettings();
+}
+
+// Set up nav clicks
+document.querySelectorAll('[data-page]').forEach(item => {
+  item.addEventListener('click', () => navigateTo(item.dataset.page));
+});
+
+// ============================================================
+// TOAST
+// ============================================================
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-' + type;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => { if (toast.parentNode) toast.remove(); }, 3000);
+}
+
+// ============================================================
+// MODAL
+// ============================================================
+function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+// ============================================================
+// HELPERS
+// ============================================================
+function timeAgo(dateStr) {
+  const now = new Date();
+  const d = new Date(dateStr);
+  const diff = Math.floor((now - d) / 1000);
+  if (diff < 60) return 'Just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function categoryBadge(cat) {
+  const c = (cat || 'general').toLowerCase();
+  return `<span class="badge badge-${c}">${c}</span>`;
+}
+
+function priorityBadge(p) {
+  const pr = (p || 'medium').toLowerCase();
+  return `<span class="badge badge-${pr}">${pr}</span>`;
+}
+
+async function apiCall(path, options = {}) {
+  const resp = await fetch(API_BASE + path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options
+  });
+  if (!resp.ok) throw new Error('API error: ' + resp.status);
+  return resp.json();
+}
+
+function setButtonLoading(btn, loading) {
+  if (loading) {
+    btn.disabled = true;
+    btn._origText = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span>';
+  } else {
+    btn.disabled = false;
+    if (btn._origText) btn.innerHTML = btn._origText;
+  }
+}
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+async function loadDashboard() {
+  loadDashboardStats();
+  loadRecentActivity();
+  loadCostToday();
+  loadWAStatus();
+}
+
+async function loadDashboardStats() {
+  try {
+    const data = await apiCall('/dashboard-stats');
+    serverOnline = true;
+    updateStatusDots(true);
+
+    document.getElementById('statsGrid').innerHTML = `
+      <div class="stat-card">
+        <div class="stat-value">${data.messages_today ?? data.messagesToday ?? 0}</div>
+        <div class="stat-label">Messages Today</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${data.replies_sent ?? data.repliesSent ?? 0}</div>
+        <div class="stat-label">Replies Sent</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${data.pending_meetings ?? data.pendingMeetings ?? 0}</div>
+        <div class="stat-label">Pending Meetings</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${data.tasks_due ?? data.tasksDue ?? 0}</div>
+        <div class="stat-label">Tasks Due</div>
+      </div>
+    `;
+  } catch (e) {
+    serverOnline = false;
+    updateStatusDots(false);
+    document.getElementById('statsGrid').innerHTML = `
+      <div class="stat-card"><div class="stat-value">--</div><div class="stat-label">Messages Today</div></div>
+      <div class="stat-card"><div class="stat-value">--</div><div class="stat-label">Replies Sent</div></div>
+      <div class="stat-card"><div class="stat-value">--</div><div class="stat-label">Pending Meetings</div></div>
+      <div class="stat-card"><div class="stat-value">--</div><div class="stat-label">Tasks Due</div></div>
+    `;
+  }
+}
+
+async function loadRecentActivity() {
+  try {
+    const { data, error } = await supabase
+      .from('whatsapp_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(10);
+
+    if (error) throw error;
+    const list = document.getElementById('activityList');
+
+    if (!data || data.length === 0) {
+      list.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x1F4AD;</div><p>No recent activity</p></div>';
+      return;
+    }
+
+    list.innerHTML = data.map(item => `
+      <li class="activity-item">
+        <div class="activity-dir ${item.direction || 'incoming'}">
+          ${(item.direction === 'outgoing') ? '&#x2191;' : '&#x2193;'}
+        </div>
+        <div class="activity-content">
+          <div class="activity-name">${escapeHtml(item.from_name || item.from_number || 'Unknown')}</div>
+          <div class="activity-msg">${escapeHtml(item.message)}</div>
+        </div>
+        <div class="activity-time">${timeAgo(item.created_at)}</div>
+      </li>
+    `).join('');
+  } catch (e) {
+    document.getElementById('activityList').innerHTML =
+      '<div class="empty-state"><p>Could not load activity</p></div>';
+  }
+}
+
+async function loadCostToday() {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data, error } = await supabase
+      .from('usage_logs')
+      .select('*')
+      .eq('date', today)
+      .maybeSingle();
+
+    if (data) {
+      document.getElementById('costValue').textContent = '$' + (data.estimated_cost || 0).toFixed(4);
+      document.getElementById('costBreakdown').textContent =
+        `Haiku: ${data.haiku_calls || 0} | Sonnet: ${data.sonnet_calls || 0}`;
+    } else {
+      document.getElementById('costValue').textContent = '$0.00';
+      document.getElementById('costBreakdown').textContent = 'No usage today';
+    }
+  } catch (e) {
+    document.getElementById('costValue').textContent = '--';
+  }
+}
+
+async function loadWAStatus() {
+  try {
+    const { data, error } = await supabase
+      .from('assistant_settings')
+      .select('value')
+      .eq('key', 'wa_enabled')
+      .maybeSingle();
+
+    const enabled = data && data.value === 'true';
+    document.getElementById('waToggleDash').checked = enabled;
+    document.getElementById('waToggleSettings').checked = enabled;
+    updateWALabel(enabled);
+  } catch (e) { /* ignore */ }
+}
+
+function updateWALabel(enabled) {
+  const label = document.getElementById('waStatusLabel');
+  label.textContent = enabled ? 'WhatsApp ON' : 'WhatsApp OFF';
+  label.className = 'wa-status ' + (enabled ? 'on' : 'off');
+}
+
+async function toggleWA(enabled) {
+  document.getElementById('waToggleDash').checked = enabled;
+  document.getElementById('waToggleSettings').checked = enabled;
+  updateWALabel(enabled);
+
+  try {
+    const { error } = await supabase
+      .from('assistant_settings')
+      .upsert({ key: 'wa_enabled', value: enabled ? 'true' : 'false', updated_at: new Date().toISOString() });
+    if (error) throw error;
+    showToast('WhatsApp ' + (enabled ? 'enabled' : 'disabled'), 'success');
+  } catch (e) {
+    showToast('Failed to update setting', 'error');
+  }
+}
+
+function updateStatusDots(online) {
+  const cls = online ? 'status-dot online' : 'status-dot offline';
+  document.getElementById('statusDotMain').className = cls;
+  document.getElementById('statusDotSidebar').className = cls;
+}
+
+// ============================================================
+// CONTACTS
+// ============================================================
+async function loadContacts() {
+  try {
+    const { data, error } = await supabase
+      .from('contacts')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (error) throw error;
+    allContacts = data || [];
+    renderContacts(allContacts);
+  } catch (e) {
+    document.getElementById('contactsList').innerHTML =
+      '<div class="empty-state"><p>Could not load contacts</p></div>';
+  }
+}
+
+function filterContacts(query) {
+  const q = query.toLowerCase().trim();
+  if (!q) return renderContacts(allContacts);
+  renderContacts(allContacts.filter(c =>
+    (c.name || '').toLowerCase().includes(q)
+  ));
+}
+
+function renderContacts(contacts) {
+  const el = document.getElementById('contactsList');
+  if (!contacts.length) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x1F464;</div><p>No contacts found</p></div>';
+    return;
+  }
+  el.innerHTML = contacts.map(c => `
+    <div class="list-item">
+      <div class="list-item-info">
+        <div class="list-item-name">${escapeHtml(c.name)}</div>
+        <div class="list-item-sub">${escapeHtml(c.phone || c.whatsapp || '')}</div>
+      </div>
+      ${categoryBadge(c.category)}
+      <div class="list-item-actions">
+        <button class="btn btn-ghost btn-icon btn-sm" onclick='editContact(${JSON.stringify(c).replace(/'/g, "&#39;")})' title="Edit">&#x270E;</button>
+        <button class="btn btn-ghost btn-icon btn-sm" onclick="deleteContact('${c.id}')" title="Delete">&#x1F5D1;</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function openContactModal(contact) {
+  document.getElementById('contactModalTitle').textContent = contact ? 'Edit Contact' : 'Add Contact';
+  document.getElementById('contactId').value = contact ? contact.id : '';
+  document.getElementById('contactName').value = contact ? contact.name || '' : '';
+  document.getElementById('contactPhone').value = contact ? contact.phone || '' : '';
+  document.getElementById('contactWhatsapp').value = contact ? contact.whatsapp || '' : '';
+  document.getElementById('contactEmail').value = contact ? contact.email || '' : '';
+  document.getElementById('contactCategory').value = contact ? contact.category || 'general' : 'general';
+  document.getElementById('contactNotes').value = contact ? contact.notes || '' : '';
+  openModal('contactModal');
+}
+
+function editContact(contact) {
+  openContactModal(contact);
+}
+
+async function saveContact() {
+  const btn = document.getElementById('contactSaveBtn');
+  setButtonLoading(btn, true);
+
+  const id = document.getElementById('contactId').value;
+  const payload = {
+    name: document.getElementById('contactName').value.trim(),
+    phone: document.getElementById('contactPhone').value.trim(),
+    whatsapp: document.getElementById('contactWhatsapp').value.trim(),
+    email: document.getElementById('contactEmail').value.trim(),
+    category: document.getElementById('contactCategory').value,
+    notes: document.getElementById('contactNotes').value.trim()
+  };
+
+  if (!payload.name) {
+    showToast('Name is required', 'error');
+    setButtonLoading(btn, false);
+    return;
+  }
+
+  try {
+    let error;
+    if (id) {
+      ({ error } = await supabase.from('contacts').update(payload).eq('id', id));
+    } else {
+      ({ error } = await supabase.from('contacts').insert(payload));
+    }
+    if (error) throw error;
+    showToast(id ? 'Contact updated' : 'Contact added', 'success');
+    closeModal('contactModal');
+    loadContacts();
+  } catch (e) {
+    showToast('Failed to save contact: ' + e.message, 'error');
+  }
+  setButtonLoading(btn, false);
+}
+
+async function deleteContact(id) {
+  if (!confirm('Delete this contact?')) return;
+  try {
+    const { error } = await supabase.from('contacts').delete().eq('id', id);
+    if (error) throw error;
+    showToast('Contact deleted', 'success');
+    loadContacts();
+  } catch (e) {
+    showToast('Failed to delete contact', 'error');
+  }
+}
+
+// ============================================================
+// MEETINGS
+// ============================================================
+async function loadMeetings() {
+  try {
+    let query = supabase.from('pending_meetings').select('*').order('created_at', { ascending: false });
+
+    if (currentMeetingTab === 'pending') {
+      query = query.eq('status', 'waiting');
+    } else {
+      query = query.in('status', ['confirmed', 'declined']);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    renderMeetings(data || []);
+  } catch (e) {
+    document.getElementById('meetingsList').innerHTML =
+      '<div class="empty-state"><p>Could not load meetings</p></div>';
+  }
+}
+
+function setMeetingTab(tab, btn) {
+  currentMeetingTab = tab;
+  btn.parentElement.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  loadMeetings();
+}
+
+function renderMeetings(meetings) {
+  const el = document.getElementById('meetingsList');
+  if (!meetings.length) {
+    const label = currentMeetingTab === 'pending' ? 'No pending meetings' : 'No meeting history';
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">&#x1F4C5;</div><p>${label}</p></div>`;
+    return;
+  }
+
+  el.innerHTML = meetings.map(m => {
+    const isPending = m.status === 'waiting';
+    const statusClass = m.status === 'confirmed' ? 'confirmed' : m.status === 'declined' ? 'declined' : '';
+    return `
+      <div class="meeting-card ${statusClass}">
+        <div class="mc-header">
+          <div class="mc-name">${escapeHtml(m.requester_name || 'Unknown')}</div>
+          <div class="mc-time">${timeAgo(m.created_at)}</div>
+        </div>
+        <div class="mc-msg">${escapeHtml(m.message || 'No message')}</div>
+        <div class="mc-phone">${escapeHtml(m.requester_number || '')}</div>
+        ${isPending ? `
+          <div class="mc-actions">
+            <button class="btn btn-green btn-sm" id="confirm-${m.id}" onclick="handleMeeting('${m.id}', 'confirm', this)">Confirm</button>
+            <button class="btn btn-red btn-sm" id="decline-${m.id}" onclick="handleMeeting('${m.id}', 'decline', this)">Decline</button>
+          </div>
+        ` : `
+          <div style="font-size:12px;font-weight:600;color:${m.status === 'confirmed' ? 'var(--green)' : 'var(--red)'}">
+            ${m.status === 'confirmed' ? 'Confirmed' : 'Declined'}
+          </div>
+        `}
+      </div>
+    `;
+  }).join('');
+}
+
+async function handleMeeting(id, action, btn) {
+  setButtonLoading(btn, true);
+  try {
+    await apiCall('/confirm-meeting', {
+      method: 'POST',
+      body: JSON.stringify({ meeting_id: id, action })
+    });
+    showToast('Meeting ' + (action === 'confirm' ? 'confirmed' : 'declined'), 'success');
+    loadMeetings();
+  } catch (e) {
+    showToast('Failed to ' + action + ' meeting', 'error');
+    setButtonLoading(btn, false);
+  }
+}
+
+// ============================================================
+// TASKS
+// ============================================================
+async function loadTasks() {
+  try {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    allTasks = data || [];
+    renderTasks();
+  } catch (e) {
+    document.getElementById('tasksList').innerHTML =
+      '<div class="empty-state"><p>Could not load tasks</p></div>';
+  }
+}
+
+function setTaskTab(tab, btn) {
+  currentTaskTab = tab;
+  btn.parentElement.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  renderTasks();
+}
+
+function renderTasks() {
+  let filtered = allTasks;
+  if (currentTaskTab === 'pending') filtered = allTasks.filter(t => !t.done);
+  if (currentTaskTab === 'done') filtered = allTasks.filter(t => t.done);
+
+  const el = document.getElementById('tasksList');
+  if (!filtered.length) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x2705;</div><p>No tasks</p></div>';
+    return;
+  }
+
+  el.innerHTML = filtered.map(t => `
+    <div class="task-card ${t.done ? 'done' : ''}">
+      <div class="task-checkbox ${t.done ? 'checked' : ''}" onclick="toggleTask('${t.id}', ${!t.done})"></div>
+      <div class="task-info">
+        <div class="task-title">${escapeHtml(t.title)}</div>
+        <div class="task-meta">
+          ${priorityBadge(t.priority)}
+          ${t.due_date ? `<span class="task-due">Due: ${escapeHtml(t.due_date)}</span>` : ''}
+          ${t.category ? `<span class="task-due">${escapeHtml(t.category)}</span>` : ''}
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-icon btn-sm" onclick="deleteTask('${t.id}')" title="Delete">&#x1F5D1;</button>
+    </div>
+  `).join('');
+}
+
+async function toggleTask(id, done) {
+  try {
+    const { error } = await supabase.from('tasks').update({ done }).eq('id', id);
+    if (error) throw error;
+    const task = allTasks.find(t => t.id === id);
+    if (task) task.done = done;
+    renderTasks();
+    showToast(done ? 'Task completed' : 'Task reopened', 'success');
+  } catch (e) {
+    showToast('Failed to update task', 'error');
+  }
+}
+
+function openTaskModal() {
+  document.getElementById('taskModalTitle').textContent = 'Add Task';
+  document.getElementById('taskId').value = '';
+  document.getElementById('taskTitle').value = '';
+  document.getElementById('taskPriority').value = 'medium';
+  document.getElementById('taskDueDate').value = '';
+  document.getElementById('taskCategory').value = '';
+  openModal('taskModal');
+}
+
+async function saveTask() {
+  const btn = document.getElementById('taskSaveBtn');
+  setButtonLoading(btn, true);
+
+  const id = document.getElementById('taskId').value;
+  const payload = {
+    title: document.getElementById('taskTitle').value.trim(),
+    priority: document.getElementById('taskPriority').value,
+    due_date: document.getElementById('taskDueDate').value || null,
+    category: document.getElementById('taskCategory').value.trim() || null,
+    done: false
+  };
+
+  if (!payload.title) {
+    showToast('Title is required', 'error');
+    setButtonLoading(btn, false);
+    return;
+  }
+
+  try {
+    let error;
+    if (id) {
+      delete payload.done;
+      ({ error } = await supabase.from('tasks').update(payload).eq('id', id));
+    } else {
+      ({ error } = await supabase.from('tasks').insert(payload));
+    }
+    if (error) throw error;
+    showToast(id ? 'Task updated' : 'Task added', 'success');
+    closeModal('taskModal');
+    loadTasks();
+  } catch (e) {
+    showToast('Failed to save task: ' + e.message, 'error');
+  }
+  setButtonLoading(btn, false);
+}
+
+async function deleteTask(id) {
+  if (!confirm('Delete this task?')) return;
+  try {
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    if (error) throw error;
+    showToast('Task deleted', 'success');
+    loadTasks();
+  } catch (e) {
+    showToast('Failed to delete task', 'error');
+  }
+}
+
+// ============================================================
+// SETTINGS
+// ============================================================
+async function loadSettings() {
+  try {
+    const { data, error } = await supabase
+      .from('assistant_settings')
+      .select('*');
+
+    if (error) throw error;
+    const settings = {};
+    (data || []).forEach(r => { settings[r.key] = r.value; });
+
+    document.getElementById('waToggleSettings').checked = settings.wa_enabled === 'true';
+    document.getElementById('waToggleDash').checked = settings.wa_enabled === 'true';
+    updateWALabel(settings.wa_enabled === 'true');
+
+    if (settings.reply_hours_from) document.getElementById('replyFrom').value = settings.reply_hours_from;
+    if (settings.reply_hours_to) document.getElementById('replyTo').value = settings.reply_hours_to;
+    document.getElementById('privacyToggle').checked = settings.privacy_mode === 'true';
+    document.getElementById('notifyAllToggle').checked = settings.notify_all === 'true';
+    document.getElementById('notifyMeetingsToggle').checked = settings.notify_meetings_only === 'true';
+  } catch (e) {
+    showToast('Could not load settings', 'error');
+  }
+}
+
+async function saveSetting(key, value) {
+  try {
+    const { error } = await supabase
+      .from('assistant_settings')
+      .upsert({ key, value, updated_at: new Date().toISOString() });
+    if (error) throw error;
+    showToast('Setting saved', 'success');
+  } catch (e) {
+    showToast('Failed to save setting', 'error');
+  }
+}
+
+async function clearWAHistory() {
+  if (!confirm('This will delete all WhatsApp conversation history. Are you sure?')) return;
+  try {
+    const { error } = await supabase
+      .from('assistant_messages')
+      .delete()
+      .like('chat_id', 'wa_%');
+    if (error) throw error;
+    showToast('WhatsApp history cleared', 'success');
+  } catch (e) {
+    showToast('Failed to clear history: ' + e.message, 'error');
+  }
+}
+
+async function clearAllTasks() {
+  if (!confirm('This will delete ALL tasks. Are you sure?')) return;
+  try {
+    const { error } = await supabase
+      .from('tasks')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
+    if (error) throw error;
+    allTasks = [];
+    renderTasks();
+    showToast('All tasks cleared', 'success');
+  } catch (e) {
+    showToast('Failed to clear tasks: ' + e.message, 'error');
+  }
+}
+
+// ============================================================
+// REALTIME SUBSCRIPTIONS
+// ============================================================
+function setupRealtime() {
+  supabase.channel('public:whatsapp_logs')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'whatsapp_logs' }, payload => {
+      const activePage = localStorage.getItem('rabih_active_page') || 'dashboard';
+      if (activePage === 'dashboard') {
+        loadRecentActivity();
+        loadDashboardStats();
+      }
+      const msg = payload.new;
+      if (msg.direction === 'incoming') {
+        showToast('New message from ' + (msg.from_name || msg.from_number || 'Unknown'), 'info');
+      }
+    })
+    .subscribe();
+
+  supabase.channel('public:pending_meetings')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_meetings' }, payload => {
+      const activePage = localStorage.getItem('rabih_active_page') || 'dashboard';
+      if (activePage === 'meetings') loadMeetings();
+      if (activePage === 'dashboard') loadDashboardStats();
+      if (payload.eventType === 'INSERT' && payload.new.status === 'waiting') {
+        showToast('New meeting request from ' + (payload.new.requester_name || 'Unknown'), 'info');
+      }
+    })
+    .subscribe();
+}
+
+// ============================================================
+// INIT
+// ============================================================
+(function init() {
+  const savedPage = localStorage.getItem('rabih_active_page') || 'dashboard';
+  navigateTo(savedPage);
+  setupRealtime();
+
+  // Periodic status check every 60s
+  setInterval(() => {
+    const activePage = localStorage.getItem('rabih_active_page') || 'dashboard';
+    if (activePage === 'dashboard') loadDashboardStats();
+  }, 60000);
+})();
+</script>
+</body>
+</html>

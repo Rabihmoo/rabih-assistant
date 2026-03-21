@@ -30,6 +30,13 @@ const { initWhatsApp, forceNewQR } = require('./whatsapp-handler');
 
 const app = express();
 app.use(express.json());
+app.use(function(req, res, next) {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
@@ -536,11 +543,13 @@ async function handleMessage(chatId, userText, messageId) {
   }
   if (userText.toLowerCase().trim() === '/wa_on') {
     setWaEnabled(true);
+    await supabase.from('assistant_settings').upsert({ key: 'wa_enabled', value: 'true', updated_at: new Date().toISOString() });
     await sendTelegram(chatId, 'WhatsApp auto-reply is now ON (all replies enabled).');
     return;
   }
   if (userText.toLowerCase().trim() === '/wa_off') {
     setWaEnabled(false);
+    await supabase.from('assistant_settings').upsert({ key: 'wa_enabled', value: 'false', updated_at: new Date().toISOString() });
     await sendTelegram(chatId, 'WhatsApp auto-reply is now OFF for others. Your own messages still work. Send /wa_on to re-enable.');
     return;
   }
@@ -1142,13 +1151,134 @@ app.get('/trade-history', async (req, res) => {
   } catch (e) { res.json({ success: false, error: e.message }); }
 });
 
+// ========================= DASHBOARD API =========================
+
+// GET /dashboard-stats — returns all stats for the dashboard
+app.get('/dashboard-stats', async function(req, res) {
+  try {
+    var today = new Date().toISOString().split('T')[0];
+    var todayStart = today + 'T00:00:00.000Z';
+
+    var [msgRes, replyRes, meetRes, taskRes, costRes] = await Promise.all([
+      supabase.from('whatsapp_logs').select('id', { count: 'exact', head: true }).eq('direction', 'incoming').gte('created_at', todayStart),
+      supabase.from('whatsapp_logs').select('id', { count: 'exact', head: true }).eq('direction', 'outgoing').gte('created_at', todayStart),
+      supabase.from('pending_meetings').select('id', { count: 'exact', head: true }).eq('status', 'waiting'),
+      supabase.from('tasks').select('id', { count: 'exact', head: true }).eq('done', false),
+      supabase.from('usage_logs').select('estimated_cost').eq('date', today)
+    ]);
+
+    var costToday = 0;
+    if (costRes.data && costRes.data.length > 0) {
+      costToday = costRes.data.reduce(function(sum, r) { return sum + (parseFloat(r.estimated_cost) || 0); }, 0);
+    }
+
+    res.json({
+      messages_today: msgRes.count || 0,
+      replies_today: replyRes.count || 0,
+      pending_meetings: meetRes.count || 0,
+      tasks_due_today: taskRes.count || 0,
+      cost_today: costToday,
+      wa_enabled: getWaEnabled(),
+      bot_status: 'online'
+    });
+  } catch (err) {
+    console.error('Dashboard stats error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /confirm-meeting — confirm or decline a meeting from the dashboard
+app.post('/confirm-meeting', async function(req, res) {
+  try {
+    var meetingId = req.body.meeting_id;
+    var action = req.body.action;
+    if (!meetingId || !action) {
+      return res.status(400).json({ error: 'meeting_id and action required' });
+    }
+
+    var { data: meeting } = await supabase.from('pending_meetings')
+      .select('*').eq('id', meetingId).limit(1).single();
+    if (!meeting) {
+      return res.status(404).json({ error: 'Meeting not found' });
+    }
+
+    var meetingLabel = meeting.requester_name || meeting.requester_number;
+
+    if (action === 'confirm') {
+      await supabase.from('pending_meetings').update({ status: 'confirmed' }).eq('id', meetingId);
+
+      // Extract date/time with Haiku
+      var dateInfo = { date: '', time: '' };
+      try {
+        var todayStr = new Date().toISOString().split('T')[0];
+        var extractRes = await axios.post('https://api.anthropic.com/v1/messages', {
+          model: HAIKU_MODEL, max_tokens: 100,
+          system: 'Extract the meeting date and time from this message. Today is ' + todayStr + '. If "tomorrow" is mentioned, calculate the actual date. Return ONLY JSON: {"date":"YYYY-MM-DD","time":"HH:MM"}. If unknown use empty strings.',
+          messages: [{ role: 'user', content: meeting.message }]
+        }, { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 15000 });
+        trackUsage(HAIKU_MODEL);
+        var jm = extractRes.data.content[0].text.match(/\{[^}]+\}/);
+        if (jm) dateInfo = JSON.parse(jm[0]);
+      } catch (eErr) { console.error('Date extraction error:', eErr.message); }
+
+      // Send WhatsApp confirmation
+      var waMsg = 'Rabih confirmed';
+      if (dateInfo.date && dateInfo.time) waMsg += ' — see you ' + dateInfo.date + ' at ' + dateInfo.time + '. Looking forward to it!';
+      else if (dateInfo.date) waMsg += ' — see you on ' + dateInfo.date + '. Looking forward to it!';
+      else waMsg += '! He\'ll be in touch shortly to set the time.';
+      await handleCommunicationTool('send_whatsapp_message', { phone_number: meeting.requester_number, message: waMsg });
+
+      // Create calendar event
+      var calResult = null;
+      if (dateInfo.date && dateInfo.time) {
+        try {
+          calResult = await handleCalendarTool('create_calendar_event', { title: 'Meeting with ' + meetingLabel, date: dateInfo.date, time: dateInfo.time, duration_minutes: 60 });
+        } catch (cErr) { console.error('Calendar error:', cErr.message); }
+      }
+
+      // Notify Rabih on Telegram
+      var tg = 'Done ✅\nMeeting confirmed with ' + meetingLabel;
+      if (dateInfo.date && dateInfo.time) tg += '\nDate: ' + dateInfo.date + ' at ' + dateInfo.time;
+      tg += '\nWhatsApp sent to ' + meeting.requester_number;
+      if (calResult) tg += '\nCalendar event created';
+      await sendTelegram(RABIH_CHAT_ID, tg);
+
+      res.json({ success: true, action: 'confirmed', name: meetingLabel, date: dateInfo.date, time: dateInfo.time });
+    } else if (action === 'decline') {
+      await supabase.from('pending_meetings').update({ status: 'declined' }).eq('id', meetingId);
+      await handleCommunicationTool('send_whatsapp_message', { phone_number: meeting.requester_number, message: 'Unfortunately Rabih is not available at that time. Feel free to suggest another time.' });
+      await sendTelegram(RABIH_CHAT_ID, 'Meeting declined. Polite decline sent to ' + meetingLabel + '.');
+      res.json({ success: true, action: 'declined', name: meetingLabel });
+    } else {
+      res.status(400).json({ error: 'action must be confirm or decline' });
+    }
+  } catch (err) {
+    console.error('Confirm meeting error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /wa-toggle — toggle WhatsApp from dashboard
+app.post('/wa-toggle', async function(req, res) {
+  try {
+    var enabled = req.body.enabled;
+    setWaEnabled(enabled);
+    // Also sync to Supabase for dashboard reads
+    await supabase.from('assistant_settings').upsert({ key: 'wa_enabled', value: String(enabled), updated_at: new Date().toISOString() });
+    console.log('WA toggled from dashboard:', enabled);
+    res.json({ success: true, wa_enabled: enabled });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ========================= SERVER =========================
 
 app.get('/', (req, res) => res.json({
   status: 'Rabih Assistant v5 running',
   tools: TOOLS.length,
   features: ['calendar', 'gmail', 'drive', 'files', 'expenses', 'reminders', 'whatsapp', 'phone',
-             'contacts', 'tasks', 'scheduler', 'invoices', 'location', 'news', 'voice', 'briefings', 'checklists', 'trade-alerts']
+             'contacts', 'tasks', 'scheduler', 'invoices', 'location', 'news', 'voice', 'briefings', 'checklists', 'trade-alerts', 'dashboard']
 }));
 
 app.listen(PORT, function() { console.log('Rabih Assistant v5 listening on port ' + PORT); });
