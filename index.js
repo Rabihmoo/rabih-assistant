@@ -779,21 +779,15 @@ initWhatsApp({
         return null;
       }
 
-      // Auto-reply to approved contacts (staff, business, supplier) and unknown contacts
-      var shouldReply = contactInfo && ['staff', 'business', 'supplier'].includes(contactInfo.category);
-      if (!shouldReply) {
-        // Unknown contacts — no auto-reply, just log and notify
-        return null;
-      }
-
-      // Load conversation history for this contact so the assistant has context
+      // Auto-reply to all contacts — approved get personalized, unknown get generic
       var staffChatId = 'wa_staff_' + senderNumber;
       var staffHistory = await loadHistory(staffChatId);
       var hasHistory = staffHistory.length > 0;
       if (staffHistory.length > 10) staffHistory = staffHistory.slice(-10);
       staffHistory.push({ role: 'user', content: text });
 
-      var staffSystem = buildStaffPrompt(contactInfo.name, contactInfo.category, hasHistory);
+      var staffSystem = buildStaffPrompt(contactInfo ? contactInfo.name : senderNumber, contactInfo ? contactInfo.category : 'unknown', hasHistory);
+      console.log('Calling Claude for WA contact:', senderName, '(' + senderNumber + ') hasHistory:', hasHistory);
       var response = await callClaude(staffHistory, null, staffSystem, HAIKU_MODEL, 800);
       var reply = response.content.find(function(b) { return b.type === 'text'; });
       if (reply) {

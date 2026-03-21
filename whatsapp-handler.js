@@ -10,6 +10,7 @@ let currentSock = null;
 let qrSent = false;
 let isConnected = false;
 let isProcessing = false;
+let processingStartTime = null;
 let lastConnectedNotify = 0;
 let _reconnect = null;
 let badMacCount = 0;
@@ -236,17 +237,22 @@ async function initWhatsApp(options) {
           return;
         }
 
-        // Prevent concurrent processing
+        // Prevent concurrent processing (with 90s safety timeout to prevent permanent lock)
         if (isProcessing) {
-          console.log('Skipping message — already processing:', (from || '').substring(0, 20));
-          return;
+          if (processingStartTime && (Date.now() - processingStartTime > 90000)) {
+            console.log('FORCE UNLOCKING isProcessing — stuck for >90s');
+            isProcessing = false; processingStartTime = null;
+          } else {
+            console.log('Skipping message — already processing:', (from || '').substring(0, 20));
+            return;
+          }
         }
 
         // Check if it's a voice/audio message
         var audioMsg = msg.message.audioMessage;
         if (audioMsg && onVoiceMessage) {
           console.log('WhatsApp voice message from ' + from);
-          isProcessing = true;
+          isProcessing = true; processingStartTime = Date.now();
           try {
             var audioBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: logger, reuploadRequest: sock.updateMediaMessage });
             var response = await onVoiceMessage(audioBuffer, audioMsg.mimetype || 'audio/ogg', from, isFromRabih);
@@ -260,7 +266,7 @@ async function initWhatsApp(options) {
               }
             }
           } finally {
-            isProcessing = false;
+            isProcessing = false; processingStartTime = null;
           }
           return;
         }
@@ -310,10 +316,10 @@ async function initWhatsApp(options) {
             }
           }
         } finally {
-          isProcessing = false;
+          isProcessing = false; processingStartTime = null;
         }
       } catch (err) {
-        isProcessing = false;
+        isProcessing = false; processingStartTime = null;
         console.error('WhatsApp message error:', err.message);
         try {
           // Only ever send error messages to Rabih
