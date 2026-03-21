@@ -205,6 +205,7 @@ async function initWhatsApp(options) {
     sock.ev.on('messages.upsert', async function(m) {
       var from = null;
       var msg = null;
+      try { // Outer safety — catch absolutely everything
       try {
         if (m.type !== 'notify') return;
         msg = m.messages[0];
@@ -328,6 +329,11 @@ async function initWhatsApp(options) {
             await currentSock.sendMessage(from, { text: 'Error: ' + err.message });
           }
         } catch(e) {}
+      }
+      } catch (outerErr) {
+        // Absolute last resort — never let the process crash from a message
+        isProcessing = false; processingStartTime = null;
+        console.error('CRITICAL — outer catch in messages.upsert:', outerErr.message);
       }
     });
   }

@@ -1,4 +1,12 @@
 // v5 — Full upgrade: contacts, scheduler, tasks, voice, invoices, location, news, multi-person WhatsApp
+
+// Prevent crashes from killing the server
+process.on('uncaughtException', function(err) {
+  console.error('Uncaught exception:', err.message, err.stack);
+});
+process.on('unhandledRejection', function(err) {
+  console.error('Unhandled rejection:', err && err.message ? err.message : err);
+});
 const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
@@ -371,17 +379,32 @@ function sanitizeHistory(messages) {
       if (!msg.content && msg.content !== '') continue;
     } else if (Array.isArray(msg.content)) {
       // Filter array items — keep only items with a valid 'type' field
-      var validItems = msg.content.filter(function(item) {
-        return item && typeof item === 'object' && typeof item.type === 'string';
-      });
+      var validItems = [];
+      for (var j = 0; j < msg.content.length; j++) {
+        var item = msg.content[j];
+        if (!item || typeof item !== 'object' || typeof item.type !== 'string') {
+          fixed++;
+          continue;
+        }
+        // Fix tool_result items: content must be a string, not an array
+        if (item.type === 'tool_result') {
+          if (Array.isArray(item.content)) {
+            fixed++;
+            item.content = item.content.map(function(c) {
+              return typeof c === 'string' ? c : (c && c.text ? c.text : JSON.stringify(c));
+            }).join('\n');
+          } else if (item.content !== undefined && item.content !== null && typeof item.content !== 'string') {
+            fixed++;
+            item.content = JSON.stringify(item.content);
+          }
+        }
+        validItems.push(item);
+      }
       if (validItems.length === 0) {
         fixed++;
         continue; // Remove message entirely if no valid items left
       }
-      if (validItems.length !== msg.content.length) {
-        fixed++;
-        msg.content = validItems;
-      }
+      msg.content = validItems;
     } else {
       // Content is not string and not array — convert to string
       fixed++;
@@ -860,9 +883,24 @@ initWhatsApp({
       const errDetail = (err.response && err.response.data) ? JSON.stringify(err.response.data).substring(0, 300) : err.message;
       console.error('WhatsApp Claude error:', errDetail);
       if (err.response && err.response.status === 400) {
-        console.error('MEMORY CLEAR TRIGGERED — 400 error from Claude API. chat_id: wa_' + from + ', error detail:', errDetail);
+        console.error('MEMORY CLEAR + RETRY — 400 error from Claude API. chat_id: wa_' + from + ', error detail:', errDetail);
         await supabase.from('assistant_messages').delete().eq('chat_id', 'wa_' + from);
-        return 'Had a memory issue — cleared history. Please send your message again.';
+        // Retry once with clean slate — just the current message
+        try {
+          var retryHistory = [{ role: 'user', content: text }];
+          var retryMemory = await loadMemory();
+          var retryModel = classifyWhatsApp(text);
+          var retryTokens = getWhatsAppMaxTokens(text);
+          var retryResponse = await runToolLoop(retryHistory, retryMemory, null, retryModel, false, retryTokens);
+          var retryText = retryResponse.content.find(function(b) { return b.type === 'text'; });
+          var retryReply = retryText ? retryText.text : 'Done!';
+          await saveMessage('wa_' + from, 'user', text);
+          await saveMessage('wa_' + from, 'assistant', retryReply);
+          return retryReply;
+        } catch (retryErr) {
+          console.error('Retry also failed:', retryErr.message);
+          return 'Had a memory issue — cleared history. Please try again.';
+        }
       }
       return 'Error: ' + err.message;
     }
@@ -963,6 +1001,26 @@ initWhatsApp({
       return null;
     } catch (err) {
       console.error('Other message handler error:', err.message);
+      // On 400 error, clear history and retry with clean slate
+      if (err.response && err.response.status === 400) {
+        var otherChatId = 'wa_staff_' + senderNumber;
+        console.error('MEMORY CLEAR + RETRY for staff chat:', otherChatId);
+        await supabase.from('assistant_messages').delete().eq('chat_id', otherChatId);
+        try {
+          var retryHistory = [{ role: 'user', content: text }];
+          var contactName = (contactInfo && contactInfo.name) || senderNumber;
+          var retrySystem = buildStaffPrompt(contactName, contactInfo ? contactInfo.category : 'unknown', false);
+          var retryResponse = await callClaude(retryHistory, null, retrySystem, HAIKU_MODEL, 800);
+          var retryReply = retryResponse.content.find(function(b) { return b.type === 'text'; });
+          if (retryReply) {
+            await saveMessage(otherChatId, 'user', text);
+            await saveMessage(otherChatId, 'assistant', retryReply.text);
+            return retryReply.text;
+          }
+        } catch (retryErr) {
+          console.error('Staff retry also failed:', retryErr.message);
+        }
+      }
       return null;
     }
   },
