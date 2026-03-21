@@ -115,7 +115,8 @@ function getWhatsAppSocket() {
 
 // Options: { telegramToken, rabihChatId, onRabihMessage, onOtherMessage, onVoiceMessage }
 async function initWhatsApp(options) {
-  const logger = pino({ level: 'silent' });
+  const logger = pino({ level: 'fatal' }).child({ module: 'baileys' });
+  logger.level = 'fatal';
   const telegramToken = options.telegramToken;
   const rabihChatId = options.rabihChatId;
   const onRabihMessage = options.onRabihMessage;
@@ -125,7 +126,7 @@ async function initWhatsApp(options) {
 
   async function connect() {
     _reconnect = connect;
-    const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER, logger);
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -139,9 +140,9 @@ async function initWhatsApp(options) {
     });
 
     currentSock = sock;
+    // Wrap saveCreds to suppress any internal logging of auth objects (Buffer keys etc)
     sock.ev.on('creds.update', function() {
-      saveCreds();
-      console.log('Baileys auth updated');
+      try { saveCreds(); } catch(e) {}
     });
 
     sock.ev.on('connection.update', async function(update) {
@@ -266,7 +267,15 @@ async function initWhatsApp(options) {
           return;
         }
 
-        var isFromRabih = from.includes(RABIH_NUMBER) || msg.key.fromMe === true;
+        // Skip ALL outgoing messages (fromMe) — Rabih talks to the bot via Telegram,
+        // not by sending WhatsApp messages. Without this, when Rabih manually texts a
+        // contact, the bot treats it as a command, generates a Claude reply, and sends
+        // it to the contact's chat. This caused the "Deal ✅ أنا هون يا رابح" bug.
+        if (msg.key.fromMe === true) {
+          return;
+        }
+
+        var isFromRabih = from.includes(RABIH_NUMBER);
 
         // Dedup checks
         if (processedMessages.has(messageId)) return;
