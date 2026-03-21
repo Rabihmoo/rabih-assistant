@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
 const axios = require('axios');
 const FormData = require('form-data');
@@ -9,16 +9,9 @@ const fs = require('fs');
 let currentSock = null;
 let qrSent = false;
 let isConnected = false;
-let isProcessing = false;
-let processingStartTime = null;
 let lastConnectedNotify = 0;
 let _reconnect = null;
 let badMacCount = 0;
-let lastBadMacReset = Date.now();
-const sentMessages = new Set();
-const processedMessages = new Set();
-
-const RABIH_NUMBER = '258875254847';
 
 // ====== RATE LIMITING & HUMAN-LIKE SENDING ======
 const MSG_HOUR_LIMIT = 20;
@@ -113,16 +106,13 @@ function getWhatsAppSocket() {
   return currentSock;
 }
 
-// Options: { telegramToken, rabihChatId, onRabihMessage, onOtherMessage, onVoiceMessage }
+// Options: { telegramToken, rabihChatId }
+// Baileys stays connected for outbound sends only. No incoming message processing.
 async function initWhatsApp(options) {
   const logger = pino({ level: 'fatal' }).child({ module: 'baileys' });
   logger.level = 'fatal';
   const telegramToken = options.telegramToken;
   const rabihChatId = options.rabihChatId;
-  const onRabihMessage = options.onRabihMessage;
-  const onOtherMessage = options.onOtherMessage;
-  const onVoiceMessage = options.onVoiceMessage;
-  const RABIH_JID = '258875254847@s.whatsapp.net';
 
   async function connect() {
     _reconnect = connect;
@@ -249,141 +239,21 @@ async function initWhatsApp(options) {
       }
     });
 
-    sock.ev.on('messages.upsert', async function(m) {
-      var from = null;
-      var msg = null;
-      try { // Outer safety — catch absolutely everything
+    // Incoming messages: log only, never process or reply.
+    // Baileys stays connected solely for outbound sends via send_whatsapp_message tool.
+    sock.ev.on('messages.upsert', function(m) {
       try {
         if (m.type !== 'notify') return;
-        msg = m.messages[0];
-        if (!msg) return;
-        if (!msg.message) return;
-
-        from = msg.key.remoteJid;
-        var messageId = msg.key.id;
-
-        // Skip group messages
-        if (from.endsWith('@g.us') || from.endsWith('@broadcast')) {
-          return;
-        }
-
-        // Skip ALL outgoing messages (fromMe) — Rabih talks to the bot via Telegram,
-        // not by sending WhatsApp messages. Without this, when Rabih manually texts a
-        // contact, the bot treats it as a command, generates a Claude reply, and sends
-        // it to the contact's chat. This caused the "Deal ✅ أنا هون يا رابح" bug.
-        if (msg.key.fromMe === true) {
-          return;
-        }
-
-        var isFromRabih = from.includes(RABIH_NUMBER);
-
-        // Dedup checks
-        if (processedMessages.has(messageId)) return;
-        processedMessages.add(messageId);
-        setTimeout(function() { processedMessages.delete(messageId); }, 60000);
-
-        if (sentMessages.has(messageId)) {
-          sentMessages.delete(messageId);
-          return;
-        }
-
-        // Prevent concurrent processing (with 90s safety timeout to prevent permanent lock)
-        if (isProcessing) {
-          if (processingStartTime && (Date.now() - processingStartTime > 90000)) {
-            console.log('FORCE UNLOCKING isProcessing — stuck for >90s');
-            isProcessing = false; processingStartTime = null;
-          } else {
-            console.log('Skipping message — already processing:', (from || '').substring(0, 20));
-            return;
-          }
-        }
-
-        // Check if it's a voice/audio message
-        var audioMsg = msg.message.audioMessage;
-        if (audioMsg && onVoiceMessage) {
-          console.log('WhatsApp voice message from ' + from);
-          isProcessing = true; processingStartTime = Date.now();
-          try {
-            var audioBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: logger, reuploadRequest: sock.updateMediaMessage });
-            var response = await onVoiceMessage(audioBuffer, audioMsg.mimetype || 'audio/ogg', from, isFromRabih);
-            if (response && currentSock) {
-              var sent = await safeSendMessage(from, { text: response });
-              if (sent && sent.key && sent.key.id) {
-                sentMessages.add(sent.key.id);
-                processedMessages.add(sent.key.id);
-                setTimeout(function() { sentMessages.delete(sent.key.id); }, 60000);
-                setTimeout(function() { processedMessages.delete(sent.key.id); }, 60000);
-              }
-            }
-          } finally {
-            isProcessing = false; processingStartTime = null;
-          }
-          return;
-        }
-
-        // Extract text
-        var text = (
-          (msg.message.conversation) ||
+        var msg = m.messages && m.messages[0];
+        if (!msg || !msg.message) return;
+        if (msg.key.fromMe) return; // ignore our own outgoing messages
+        var from = msg.key.remoteJid || '';
+        if (from.endsWith('@g.us') || from.endsWith('@broadcast')) return;
+        var text = (msg.message.conversation) ||
           (msg.message.extendedTextMessage && msg.message.extendedTextMessage.text) ||
-          ''
-        );
-
-        if (!text || !text.trim()) {
-          console.log('Skipping non-text message from:', from);
-          return;
-        }
-
-        console.log('WhatsApp message from ' + from + ' (rabih:' + isFromRabih + '): ' + text.substring(0, 80));
-
-        isProcessing = true;
-        try {
-          if (isFromRabih) {
-            // Rabih's own message — full assistant mode
-            var response = await onRabihMessage(text, 'whatsapp', from);
-            if (response && currentSock) {
-              var sent = await safeSendMessage(from, { text: response });
-              if (sent && sent.key && sent.key.id) {
-                sentMessages.add(sent.key.id);
-                processedMessages.add(sent.key.id);
-                setTimeout(function() { sentMessages.delete(sent.key.id); }, 60000);
-                setTimeout(function() { processedMessages.delete(sent.key.id); }, 60000);
-              }
-              console.log('WhatsApp reply sent to Rabih OK');
-            }
-          } else if (onOtherMessage) {
-            // Message from someone else — log and notify
-            var senderNumber = from.replace('@s.whatsapp.net', '').replace('@lid', '');
-            var reply = await onOtherMessage(text, senderNumber, from);
-            if (reply && currentSock) {
-              var sent = await safeSendMessage(from, { text: reply });
-              if (sent && sent.key && sent.key.id) {
-                sentMessages.add(sent.key.id);
-                processedMessages.add(sent.key.id);
-                setTimeout(function() { sentMessages.delete(sent.key.id); }, 60000);
-                setTimeout(function() { processedMessages.delete(sent.key.id); }, 60000);
-              }
-              console.log('WhatsApp reply sent to ' + senderNumber + ' OK');
-            }
-          }
-        } finally {
-          isProcessing = false; processingStartTime = null;
-        }
-      } catch (err) {
-        isProcessing = false; processingStartTime = null;
-        console.error('WhatsApp message error:', err.message);
-        try {
-          // Only ever send error messages to Rabih
-          var errIsRabih = from && (from.includes(RABIH_NUMBER) || (msg && msg.key && msg.key.fromMe === true));
-          if (currentSock && from && errIsRabih) {
-            await safeSendMessage(from, { text: 'Error: ' + err.message });
-          }
-        } catch(e) {}
-      }
-      } catch (outerErr) {
-        // Absolute last resort — never let the process crash from a message
-        isProcessing = false; processingStartTime = null;
-        console.error('CRITICAL — outer catch in messages.upsert:', outerErr.message);
-      }
+          (msg.message.audioMessage ? '[voice]' : '[media]');
+        console.log('WA ignored:', from.substring(0, 20), String(text).substring(0, 60));
+      } catch(e) {}
     });
   }
 
