@@ -708,9 +708,60 @@ textarea.form-control { resize: vertical; min-height: 80px; }
 @media (min-width: 1024px) {
   .stats-grid { grid-template-columns: repeat(4, 1fr); }
 }
+/* Login Screen */
+#loginScreen {
+  position: fixed; inset: 0; z-index: 9999;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column;
+}
+.login-box {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 40px;
+  width: 90%; max-width: 360px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.login-box h2 { margin-bottom: 24px; font-size: 1.3rem; font-weight: 600; }
+.login-box input {
+  width: 100%; padding: 12px 16px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 1rem; outline: none;
+  margin-bottom: 16px;
+}
+.login-box input:focus { border-color: var(--accent); }
+.login-box .login-btn {
+  width: 100%; padding: 12px;
+  background: var(--accent); color: #fff;
+  border: none; border-radius: var(--radius-sm);
+  font-size: 1rem; font-weight: 600; cursor: pointer;
+  transition: background 0.2s;
+}
+.login-box .login-btn:hover { background: var(--accent-hover); }
+.login-box .login-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.login-error {
+  color: var(--red); font-size: 0.85rem;
+  margin-bottom: 12px; min-height: 20px;
+}
 </style>
 </head>
 <body>
+
+<!-- Login Screen -->
+<div id="loginScreen">
+  <div class="login-box">
+    <h2>Rabih Assistant</h2>
+    <div class="login-error" id="loginError"></div>
+    <input type="password" id="loginPassword" placeholder="Password" autocomplete="off" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="login-btn" id="loginBtn" onclick="doLogin()">Login</button>
+  </div>
+</div>
+
+<!-- App Container (hidden until auth) -->
+<div id="appContainer" style="display:none">
 
 <!-- Sidebar (desktop) -->
 <nav class="sidebar" id="sidebar">
@@ -913,6 +964,7 @@ textarea.form-control { resize: vertical; min-height: 80px; }
       <div class="settings-section-title" style="color:var(--red)">Danger Zone</div>
       <button class="btn btn-red" onclick="clearWAHistory()">Clear WhatsApp History</button>
       <button class="btn btn-red" onclick="clearAllTasks()">Clear All Tasks</button>
+      <button class="btn" style="background:var(--text-dim);color:#fff;margin-top:12px;width:100%" onclick="doLogout()">Logout</button>
     </div>
   </div>
 </div>
@@ -1002,7 +1054,101 @@ textarea.form-control { resize: vertical; min-height: 80px; }
 
 <script>
 // ============================================================
-// CONFIGURATION — fill these in
+// AUTHENTICATION
+// ============================================================
+const PASSWORD_HASH = 'c8fe29b3622a47cb46657f46d18fa10f7bbf8b8c100ab114425985c9446094bf';
+const AUTH_TOKEN_KEY = 'rabih_auth_token';
+const AUTH_EXPIRY_KEY = 'rabih_auth_expiry';
+const AUTH_ATTEMPTS_KEY = 'rabih_auth_attempts';
+const AUTH_LOCKOUT_KEY = 'rabih_auth_lockout';
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_MS = 30 * 60 * 1000;
+const TOKEN_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
+
+async function sha256(text) {
+  const encoded = new TextEncoder().encode(text);
+  const buffer = await crypto.subtle.digest('SHA-256', encoded);
+  return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function checkAuth() {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  const expiry = localStorage.getItem(AUTH_EXPIRY_KEY);
+  if (token && expiry && Date.now() < parseInt(expiry)) {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('appContainer').style.display = '';
+    return true;
+  }
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_EXPIRY_KEY);
+  document.getElementById('loginScreen').style.display = '';
+  document.getElementById('appContainer').style.display = 'none';
+  return false;
+}
+
+function isLockedOut() {
+  const lockout = localStorage.getItem(AUTH_LOCKOUT_KEY);
+  if (!lockout) return false;
+  const remaining = parseInt(lockout) - Date.now();
+  if (remaining > 0) return true;
+  localStorage.removeItem(AUTH_LOCKOUT_KEY);
+  localStorage.removeItem(AUTH_ATTEMPTS_KEY);
+  return false;
+}
+
+async function doLogin() {
+  const errEl = document.getElementById('loginError');
+  const btn = document.getElementById('loginBtn');
+  const input = document.getElementById('loginPassword');
+
+  if (isLockedOut()) {
+    const mins = Math.ceil((parseInt(localStorage.getItem(AUTH_LOCKOUT_KEY)) - Date.now()) / 60000);
+    errEl.textContent = 'Too many attempts. Try again in ' + mins + ' min.';
+    return;
+  }
+
+  const password = input.value;
+  if (!password) return;
+
+  btn.disabled = true;
+  const hash = await sha256(password);
+  btn.disabled = false;
+
+  if (hash === PASSWORD_HASH) {
+    localStorage.setItem(AUTH_TOKEN_KEY, hash + '_' + Date.now());
+    localStorage.setItem(AUTH_EXPIRY_KEY, String(Date.now() + TOKEN_EXPIRY_MS));
+    localStorage.removeItem(AUTH_ATTEMPTS_KEY);
+    localStorage.removeItem(AUTH_LOCKOUT_KEY);
+    errEl.textContent = '';
+    input.value = '';
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('appContainer').style.display = '';
+    appInit();
+  } else {
+    let attempts = parseInt(localStorage.getItem(AUTH_ATTEMPTS_KEY) || '0') + 1;
+    localStorage.setItem(AUTH_ATTEMPTS_KEY, String(attempts));
+    if (attempts >= MAX_ATTEMPTS) {
+      localStorage.setItem(AUTH_LOCKOUT_KEY, String(Date.now() + LOCKOUT_MS));
+      errEl.textContent = 'Too many attempts. Locked for 30 minutes.';
+    } else {
+      errEl.textContent = 'Wrong password.';
+    }
+    input.value = '';
+    input.focus();
+  }
+}
+
+function doLogout() {
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_EXPIRY_KEY);
+  document.getElementById('appContainer').style.display = 'none';
+  document.getElementById('loginScreen').style.display = '';
+  document.getElementById('loginPassword').value = '';
+  document.getElementById('loginError').textContent = '';
+}
+
+// ============================================================
+// CONFIGURATION
 // ============================================================
 const SUPABASE_URL = 'https://ztkulifjzlurwthvjjlp.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0a3VsaWZqemx1cnd0aHZqamxwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwODgzNzYsImV4cCI6MjA4OTY2NDM3Nn0.BUgtOsqDYtJS1-aGPXWlJq8NhZm9HIvolH_dVP2XnpU';
@@ -1691,7 +1837,7 @@ function setupRealtime() {
 // ============================================================
 // INIT
 // ============================================================
-(function init() {
+function appInit() {
   const savedPage = localStorage.getItem('rabih_active_page') || 'dashboard';
   navigateTo(savedPage);
   setupRealtime();
@@ -1701,7 +1847,11 @@ function setupRealtime() {
     const activePage = localStorage.getItem('rabih_active_page') || 'dashboard';
     if (activePage === 'dashboard') loadDashboardStats();
   }, 60000);
-})();
+}
+
+// Auth gate on page load
+if (checkAuth()) appInit();
 </script>
+</div><!-- /appContainer -->
 </body>
 </html>
