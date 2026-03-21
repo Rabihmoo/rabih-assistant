@@ -360,9 +360,40 @@ function getLatestUserText(messages) {
 
 function sanitizeHistory(messages) {
   const clean = [];
+  var fixed = 0;
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
-    if (!msg || !msg.role || (!msg.content && msg.content !== '')) continue;
+    if (!msg || !msg.role) continue;
+
+    // Fix content: must be a string or a valid array
+    if (msg.content === null || msg.content === undefined) continue;
+    if (typeof msg.content === 'string') {
+      if (!msg.content && msg.content !== '') continue;
+    } else if (Array.isArray(msg.content)) {
+      // Filter array items — keep only items with a valid 'type' field
+      var validItems = msg.content.filter(function(item) {
+        return item && typeof item === 'object' && typeof item.type === 'string';
+      });
+      if (validItems.length === 0) {
+        fixed++;
+        continue; // Remove message entirely if no valid items left
+      }
+      if (validItems.length !== msg.content.length) {
+        fixed++;
+        msg.content = validItems;
+      }
+    } else {
+      // Content is not string and not array — convert to string
+      fixed++;
+      try {
+        msg.content = JSON.stringify(msg.content);
+      } catch (e) {
+        msg.content = String(msg.content);
+      }
+      if (!msg.content) continue;
+    }
+
+    // Deduplicate consecutive same-role messages
     if (clean.length > 0 && clean[clean.length - 1].role === msg.role) {
       if (msg.role === 'user') clean[clean.length - 1] = msg;
       continue;
@@ -370,6 +401,7 @@ function sanitizeHistory(messages) {
     clean.push(msg);
   }
   while (clean.length > 0 && clean[0].role !== 'user') clean.shift();
+  if (fixed > 0) console.log('sanitizeHistory: fixed ' + fixed + ' messages, final length: ' + clean.length);
   return clean;
 }
 
@@ -460,6 +492,11 @@ async function handleMessage(chatId, userText, messageId) {
   if (userText.toLowerCase().trim() === '/reset') {
     await supabase.from('assistant_messages').delete().eq('chat_id', String(chatId));
     await sendTelegram(chatId, 'Chat history cleared. Memory facts kept.');
+    return;
+  }
+  if (userText.toLowerCase().trim() === '/wa_clear_history') {
+    await supabase.from('assistant_messages').delete().like('chat_id', 'wa_%');
+    await sendTelegram(chatId, 'All WhatsApp conversation histories cleared from Supabase.');
     return;
   }
   if (userText.toLowerCase().trim() === '/resetall') {
