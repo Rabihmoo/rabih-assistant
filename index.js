@@ -808,7 +808,7 @@ initWhatsApp({
         var isMeetingRequest = meetingKeywords.some(function(kw) { return lowerText.includes(kw); });
         if (isMeetingRequest) {
           try {
-            var meetingName = contactInfo.name || senderNumber;
+            var meetingName = (contactInfo && contactInfo.name) || senderNumber;
             await supabase.from('pending_meetings').insert({
               requester_name: meetingName,
               requester_number: senderNumber,
@@ -833,7 +833,7 @@ initWhatsApp({
         if (promisedToNotify && !isMeetingRequest) {
           // Don't duplicate — meeting requests already notify above
           await sendTelegram(RABIH_CHAT_ID,
-            'Message for you from *' + (contactInfo.name || senderNumber) + '* (' + senderNumber + '):\n\n' +
+            'Message for you from *' + ((contactInfo && contactInfo.name) || senderNumber) + '* (' + senderNumber + '):\n\n' +
             text.substring(0, 500) + '\n\n' +
             '_The assistant told them you\'d be informed._'
           ).catch(function(e) { console.error('Failed to notify Rabih about passed message:', e.message); });
