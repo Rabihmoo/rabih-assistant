@@ -31,6 +31,7 @@ const QR_SENT_FILE = path.join(DATA_DIR, 'wa_qr_sent');
 const AUTH_FOLDER = path.join(DATA_DIR, 'baileys_auth');
 
 console.log('WhatsApp auth folder:', AUTH_FOLDER);
+console.log('WA_ENABLED STATE ON STARTUP:', isWaEnabled());
 
 function markQRSent() {
   try { fs.writeFileSync(QR_SENT_FILE, '1'); } catch(e) {}
@@ -201,19 +202,29 @@ async function initWhatsApp(options) {
     });
 
     sock.ev.on('messages.upsert', async function(m) {
+      var from = null;
+      var msg = null;
       try {
         if (m.type !== 'notify') return;
-        const msg = m.messages[0];
+        msg = m.messages[0];
         if (!msg) return;
         if (!msg.message) return;
 
-        const from = msg.key.remoteJid;
-        const messageId = msg.key.id;
+        from = msg.key.remoteJid;
+        var messageId = msg.key.id;
 
         // Skip group messages
         if (from.endsWith('@g.us') || from.endsWith('@broadcast')) {
           return;
         }
+
+        // ====== ABSOLUTE WA_OFF GATE — FIRST CHECK, BEFORE ANYTHING ELSE ======
+        var isFromRabih = from.includes(RABIH_NUMBER) || msg.key.fromMe === true;
+        if (!isFromRabih && !isWaEnabled()) {
+          console.log('BLOCKED — WA auto-reply OFF, message from:', from);
+          return; // Full stop. No dedup, no processing, no history, no Claude, nothing.
+        }
+        // ======================================================================
 
         // Dedup checks
         if (processedMessages.has(messageId)) return;
@@ -238,15 +249,8 @@ async function initWhatsApp(options) {
           isProcessing = true;
           try {
             var audioBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: logger, reuploadRequest: sock.updateMediaMessage });
-            var isFromRabih = from.includes(RABIH_NUMBER) || msg.key.fromMe === true;
             var response = await onVoiceMessage(audioBuffer, audioMsg.mimetype || 'audio/ogg', from, isFromRabih);
             if (response && currentSock) {
-              // Block outgoing voice replies when WA is off and not Rabih
-              if (!isFromRabih && !isWaEnabled()) {
-                console.log('WhatsApp auto-reply OFF — blocked reply to:', from);
-                isProcessing = false;
-                return;
-              }
               var sent = await currentSock.sendMessage(from, { text: response });
               if (sent && sent.key && sent.key.id) {
                 sentMessages.add(sent.key.id);
@@ -273,7 +277,6 @@ async function initWhatsApp(options) {
           return;
         }
 
-        var isFromRabih = from.includes(RABIH_NUMBER) || msg.key.fromMe === true;
         console.log('WhatsApp message from ' + from + ' (rabih:' + isFromRabih + '): ' + text.substring(0, 80));
 
         isProcessing = true;
@@ -296,12 +299,6 @@ async function initWhatsApp(options) {
             var senderNumber = from.replace('@s.whatsapp.net', '').replace('@lid', '');
             var reply = await onOtherMessage(text, senderNumber, from);
             if (reply && currentSock) {
-              // Safety net: block ALL outgoing replies when WA is off and not Rabih
-              if (!isWaEnabled()) {
-                console.log('WhatsApp auto-reply OFF — blocked reply to:', from);
-                isProcessing = false;
-                return;
-              }
               var sent = await currentSock.sendMessage(from, { text: reply });
               if (sent && sent.key && sent.key.id) {
                 sentMessages.add(sent.key.id);
@@ -319,12 +316,10 @@ async function initWhatsApp(options) {
         isProcessing = false;
         console.error('WhatsApp message error:', err.message);
         try {
-          // Only send error messages to Rabih, never to others when WA is off
+          // Only ever send error messages to Rabih
           var errIsRabih = from && (from.includes(RABIH_NUMBER) || (msg && msg.key && msg.key.fromMe === true));
-          if (currentSock && from && (errIsRabih || isWaEnabled())) {
+          if (currentSock && from && errIsRabih) {
             await currentSock.sendMessage(from, { text: 'Error: ' + err.message });
-          } else if (from) {
-            console.log('WhatsApp auto-reply OFF — blocked error reply to:', from);
           }
         } catch(e) {}
       }
