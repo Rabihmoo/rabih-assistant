@@ -549,31 +549,35 @@ async function handleMessage(chatId, userText, messageId) {
     return;
   }
 
-  // Meeting confirmation: "YES", "NO", "YES 258...", or "NO 258..." replies from Rabih
-  var meetingMatch = userText.trim().match(/^(yes|no)(?:\s+(\d+))?$/i);
-  if (meetingMatch) {
-    var meetingAction = meetingMatch[1].toLowerCase();
-    var meetingNumber = meetingMatch[2] || null;
+  // Meeting confirmation: "YES", "NO", "YES 258...", "NO 258..." — intercept BEFORE Claude
+  var meetingTrimmed = userText.trim().toLowerCase();
+  var isMeetingReply = meetingTrimmed === 'yes' || meetingTrimmed === 'no' || /^(yes|no)\s/i.test(userText.trim());
+  if (isMeetingReply) {
+    var meetingMatch = userText.trim().match(/^(yes|no)(?:\s+(\d+))?/i);
+    var meetingAction = meetingMatch ? meetingMatch[1].toLowerCase() : meetingTrimmed;
+    var meetingNumber = meetingMatch ? (meetingMatch[2] || null) : null;
     try {
-      var pending;
-      if (meetingNumber) {
-        // Number specified — look up that specific contact
-        var res = await supabase.from('pending_meetings')
-          .select('*').eq('status', 'waiting').eq('requester_number', meetingNumber).limit(1);
-        pending = res.data;
+      // Always check for pending meetings first
+      var allPending = await supabase.from('pending_meetings')
+        .select('*').eq('status', 'waiting').order('created_at', { ascending: false });
+      var pendingList = allPending.data || [];
+
+      if (pendingList.length === 0) {
+        // No pending meetings — fall through to Claude
       } else {
-        // No number — grab all waiting meetings
-        var res = await supabase.from('pending_meetings')
-          .select('*').eq('status', 'waiting').order('created_at', { ascending: false });
-        pending = res.data;
-        if (pending && pending.length > 1) {
-          var list = pending.map(function(m, i) {
+        var pending;
+        if (meetingNumber) {
+          pending = pendingList.filter(function(m) { return m.requester_number === meetingNumber; });
+        } else if (pendingList.length === 1) {
+          pending = pendingList;
+        } else {
+          // Multiple pending — ask for number
+          var list = pendingList.map(function(m, i) {
             return (i+1) + '. ' + (m.requester_name || m.requester_number) + ' (' + m.requester_number + '): ' + (m.message || '').substring(0, 80);
           }).join('\n');
-          await sendTelegram(chatId, 'Multiple pending meetings — reply with the number:\n\n' + list + '\n\nExample: YES ' + pending[0].requester_number);
+          await sendTelegram(chatId, 'Multiple pending meetings — reply with the number:\n\n' + list + '\n\nExample: YES ' + pendingList[0].requester_number);
           return;
         }
-      }
       if (pending && pending.length > 0) {
         var meeting = pending[0];
         var meetingLabel = meeting.requester_name || meeting.requester_number;
@@ -649,13 +653,11 @@ async function handleMessage(chatId, userText, messageId) {
           await sendTelegram(chatId, 'Meeting declined. Polite decline sent to ' + meetingLabel + '.');
         }
         return;
-      } else {
-        if (meetingNumber) {
-          await sendTelegram(chatId, 'No pending meeting found for ' + meetingNumber + '.');
-          return;
-        }
-        // No pending meetings — fall through to normal message handling
+      } else if (meetingNumber) {
+        await sendTelegram(chatId, 'No pending meeting found for ' + meetingNumber + '.');
+        return;
       }
+      } // close the else block from pendingList.length check
     } catch (meetErr) {
       console.error('Meeting confirm/decline error:', meetErr.message);
     }
