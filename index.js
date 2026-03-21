@@ -849,12 +849,9 @@ initWhatsApp({
   onRabihMessage: async function(text, source, from) {
     try {
       // Log Rabih's incoming message to whatsapp_logs
-      await supabase.from('whatsapp_logs').insert({
-        from_number: '258875254847',
-        from_name: 'Rabih',
-        message: text,
-        direction: 'incoming'
-      }).then(function() {}).catch(function(e) { console.error('WA log error:', e.message); });
+      try { await supabase.from('whatsapp_logs').insert({
+        from_number: '258875254847', from_name: 'Rabih', message: text, direction: 'incoming'
+      }); } catch(e) { console.error('WA log error:', e.message); }
 
       var waHistory = await loadHistory('wa_' + from);
       var waMemory = await loadMemory();
@@ -870,13 +867,9 @@ initWhatsApp({
       await saveMessage('wa_' + from, 'user', text);
       await saveMessage('wa_' + from, 'assistant', waReply);
       // Log outgoing reply to whatsapp_logs
-      await supabase.from('whatsapp_logs').insert({
-        from_number: '258875254847',
-        from_name: 'Assistant',
-        message: waReply,
-        direction: 'outgoing',
-        replied: true
-      }).catch(function(e) { console.error('WA log error:', e.message); });
+      try { await supabase.from('whatsapp_logs').insert({
+        from_number: '258875254847', from_name: 'Assistant', message: waReply, direction: 'outgoing', replied: true
+      }); } catch(e) { console.error('WA log error:', e.message); }
       return waReply;
     } catch (err) {
       const errDetail = (err.response && err.response.data) ? JSON.stringify(err.response.data).substring(0, 300) : err.message;
@@ -1038,10 +1031,10 @@ initWhatsApp({
 
       if (isFromRabih) {
         // Log Rabih's voice message
-        await supabase.from('whatsapp_logs').insert({
+        try { await supabase.from('whatsapp_logs').insert({
           from_number: '258875254847', from_name: 'Rabih',
           message: '[Voice] ' + transcription.text, direction: 'incoming'
-        }).catch(function(e) { console.error('WA log error:', e.message); });
+        }); } catch(e) { console.error('WA log error:', e.message); }
 
         // Always process Rabih's voice messages, even when /wa_off
         var waHistory = await loadHistory('wa_258875254847@s.whatsapp.net');
@@ -1056,10 +1049,10 @@ initWhatsApp({
         await saveMessage('wa_258875254847@s.whatsapp.net', 'user', '[Voice] ' + transcription.text);
         await saveMessage('wa_258875254847@s.whatsapp.net', 'assistant', replyText);
         // Log outgoing voice reply
-        await supabase.from('whatsapp_logs').insert({
+        try { await supabase.from('whatsapp_logs').insert({
           from_number: '258875254847', from_name: 'Assistant',
           message: replyText, direction: 'outgoing', replied: true
-        }).catch(function(e) { console.error('WA log error:', e.message); });
+        }); } catch(e) { console.error('WA log error:', e.message); }
         return replyText;
       } else {
         // Voice from others — transcribe, log, notify
