@@ -20,6 +20,55 @@ const processedMessages = new Set();
 
 const RABIH_NUMBER = '258875254847';
 
+// ====== RATE LIMITING & HUMAN-LIKE SENDING ======
+const MSG_HOUR_LIMIT = 20;
+const hourlyMessages = [];
+
+function canSendMessage() {
+  var now = Date.now();
+  // Remove entries older than 1 hour
+  while (hourlyMessages.length > 0 && hourlyMessages[0] < now - 3600000) {
+    hourlyMessages.shift();
+  }
+  return hourlyMessages.length < MSG_HOUR_LIMIT;
+}
+
+function recordMessageSent() {
+  hourlyMessages.push(Date.now());
+}
+
+function randomDelay() {
+  // 2-3 second random delay
+  return 2000 + Math.floor(Math.random() * 1000);
+}
+
+function typingDuration(text) {
+  // Simulate typing: ~50ms per character, min 1s, max 4s
+  if (!text) return 1000;
+  var ms = Math.min(4000, Math.max(1000, text.length * 50));
+  return ms;
+}
+
+async function safeSendMessage(jid, content) {
+  if (!currentSock) return null;
+  if (!canSendMessage()) {
+    console.log('RATE LIMIT — max ' + MSG_HOUR_LIMIT + '/hour reached, skipping send to', jid);
+    return null;
+  }
+  // Random delay before sending
+  await new Promise(function(r) { setTimeout(r, randomDelay()); });
+  // Simulate typing
+  var text = content.text || '';
+  try { await currentSock.sendPresenceUpdate('composing', jid); } catch(e) {}
+  await new Promise(function(r) { setTimeout(r, typingDuration(text)); });
+  try { await currentSock.sendPresenceUpdate('paused', jid); } catch(e) {}
+  // Send
+  var sent = await currentSock.sendMessage(jid, content);
+  recordMessageSent();
+  return sent;
+}
+// ================================================
+
 // Use /data (Railway Volume) if available, fallback to /tmp
 const DATA_DIR = fs.existsSync('/data') ? '/data' : '/tmp';
 const QR_SENT_FILE = path.join(DATA_DIR, 'wa_qr_sent');
@@ -162,7 +211,8 @@ async function initWhatsApp(options) {
 
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
         if (shouldReconnect) {
-          setTimeout(connect, 5000);
+          console.log('Reconnecting in 30 seconds...');
+          setTimeout(connect, 30000);
         } else {
           try {
             fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
@@ -245,7 +295,7 @@ async function initWhatsApp(options) {
             var audioBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: logger, reuploadRequest: sock.updateMediaMessage });
             var response = await onVoiceMessage(audioBuffer, audioMsg.mimetype || 'audio/ogg', from, isFromRabih);
             if (response && currentSock) {
-              var sent = await currentSock.sendMessage(from, { text: response });
+              var sent = await safeSendMessage(from, { text: response });
               if (sent && sent.key && sent.key.id) {
                 sentMessages.add(sent.key.id);
                 processedMessages.add(sent.key.id);
@@ -279,7 +329,7 @@ async function initWhatsApp(options) {
             // Rabih's own message — full assistant mode
             var response = await onRabihMessage(text, 'whatsapp', from);
             if (response && currentSock) {
-              var sent = await currentSock.sendMessage(from, { text: response });
+              var sent = await safeSendMessage(from, { text: response });
               if (sent && sent.key && sent.key.id) {
                 sentMessages.add(sent.key.id);
                 processedMessages.add(sent.key.id);
@@ -293,7 +343,7 @@ async function initWhatsApp(options) {
             var senderNumber = from.replace('@s.whatsapp.net', '').replace('@lid', '');
             var reply = await onOtherMessage(text, senderNumber, from);
             if (reply && currentSock) {
-              var sent = await currentSock.sendMessage(from, { text: reply });
+              var sent = await safeSendMessage(from, { text: reply });
               if (sent && sent.key && sent.key.id) {
                 sentMessages.add(sent.key.id);
                 processedMessages.add(sent.key.id);
@@ -313,7 +363,7 @@ async function initWhatsApp(options) {
           // Only ever send error messages to Rabih
           var errIsRabih = from && (from.includes(RABIH_NUMBER) || (msg && msg.key && msg.key.fromMe === true));
           if (currentSock && from && errIsRabih) {
-            await currentSock.sendMessage(from, { text: 'Error: ' + err.message });
+            await safeSendMessage(from, { text: 'Error: ' + err.message });
           }
         } catch(e) {}
       }
@@ -334,4 +384,4 @@ async function initWhatsApp(options) {
   }
 }
 
-module.exports = { initWhatsApp: initWhatsApp, getWhatsAppSocket: getWhatsAppSocket, forceNewQR: forceNewQR };
+module.exports = { initWhatsApp: initWhatsApp, getWhatsAppSocket: getWhatsAppSocket, forceNewQR: forceNewQR, safeSendMessage: safeSendMessage };

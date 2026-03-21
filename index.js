@@ -17,7 +17,7 @@ const { driveTools, handleDriveTool } = require('./drive-direct-fix');
 const { filesTools, handleFilesTool } = require('./files-direct-fix');
 const { expenseTools, handleExpenseTool } = require('./expense-tracker');
 const { reminderTools, handleReminderTool } = require('./reminders');
-const { communicationTools, handleCommunicationTool, setSocket } = require('./communication-tools');
+const { communicationTools, handleCommunicationTool, setSocket, setSafeSend } = require('./communication-tools');
 const { contactsTools, handleContactTool, isApprovedContact } = require('./contacts');
 const { taskTools, handleTaskTool, getPendingTasksSummary } = require('./task-manager');
 const { schedulerTools, handleSchedulerTool, initScheduler } = require('./scheduler');
@@ -26,7 +26,7 @@ const { locationTools, handleLocationTool } = require('./location-tools');
 const { newsTools, handleNewsTool } = require('./news-tools');
 const { transcribeAudio } = require('./voice-handler');
 const { checklistTools, handleChecklistTool, initChecklists, processChecklistResponse } = require('./checklist-manager');
-const { initWhatsApp, forceNewQR } = require('./whatsapp-handler');
+const { initWhatsApp, forceNewQR, safeSendMessage } = require('./whatsapp-handler');
 
 const app = express();
 app.use(express.json());
@@ -903,7 +903,10 @@ initWhatsApp({
 // Sync WhatsApp socket to communication-tools
 setInterval(function() {
   const sock = require('./whatsapp-handler').getWhatsAppSocket();
-  if (sock) setSocket(sock);
+  if (sock) {
+    setSocket(sock);
+    setSafeSend(safeSendMessage);
+  }
 }, 5000);
 
 // ========================= SCHEDULER INIT =========================

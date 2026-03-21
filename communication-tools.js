@@ -2,9 +2,14 @@
 const axios = require('axios');
 
 let _socket = null;
+let _safeSend = null;
 
 function setSocket(sock) {
   _socket = sock;
+}
+
+function setSafeSend(fn) {
+  _safeSend = fn;
 }
 
 async function sendWhatsAppMessage(phoneNumber, message) {
@@ -29,7 +34,12 @@ async function sendWhatsAppMessage(phoneNumber, message) {
       return { error: 'Number ' + phoneNumber + ' is not registered on WhatsApp.' };
     }
 
-    var sent = await _socket.sendMessage(jid, { text: message });
+    var sent;
+    if (_safeSend) {
+      sent = await _safeSend(jid, { text: message });
+    } else {
+      sent = await _socket.sendMessage(jid, { text: message });
+    }
     if (!sent || !sent.key || !sent.key.id) {
       console.error('WhatsApp send returned no message ID for', jid);
       return { error: 'Message to ' + phoneNumber + ' was not confirmed by WhatsApp. It may not have been delivered.' };
@@ -61,7 +71,12 @@ async function sendWhatsAppGroup(groupJid, message) {
   if (!_socket) return { error: 'WhatsApp not connected. Please scan the QR code first.' };
   try {
     var jid = groupJid.endsWith('@g.us') ? groupJid : groupJid + '@g.us';
-    var sent = await _socket.sendMessage(jid, { text: message });
+    var sent;
+    if (_safeSend) {
+      sent = await _safeSend(jid, { text: message });
+    } else {
+      sent = await _socket.sendMessage(jid, { text: message });
+    }
     if (!sent || !sent.key || !sent.key.id) {
       console.error('WhatsApp group send returned no message ID for', jid);
       return { error: 'Group message was not confirmed by WhatsApp. It may not have been delivered.' };
@@ -165,4 +180,4 @@ async function handleCommunicationTool(toolName, toolInput) {
   }
 }
 
-module.exports = { communicationTools: communicationTools, handleCommunicationTool: handleCommunicationTool, setSocket: setSocket };
+module.exports = { communicationTools: communicationTools, handleCommunicationTool: handleCommunicationTool, setSocket: setSocket, setSafeSend: setSafeSend };
