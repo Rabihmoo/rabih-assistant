@@ -2,8 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#6C63FF">
 <title>Rabih Assistant</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-192.svg">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
@@ -15,17 +20,18 @@
   --card-hover: #1A1A24;
   --accent: #6C63FF;
   --accent-hover: #5A52E0;
+  --accent2: #4ECDC4;
   --text: #FFFFFF;
   --text-muted: #A0A0B0;
   --text-dim: #606070;
-  --border: #1E1E2A;
+  --border: #1E1E2E;
   --green: #22C55E;
   --red: #EF4444;
   --orange: #F59E0B;
   --radius: 12px;
   --radius-sm: 8px;
   --shadow: 0 4px 24px rgba(0,0,0,0.3);
-  --nav-height: 64px;
+  --nav-height: 68px;
   --sidebar-width: 240px;
 }
 
@@ -36,6 +42,8 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
+  font-size: 16px;
+  line-height: 1.5;
 }
 
 /* Scrollbar */
@@ -43,7 +51,7 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-/* Sidebar — desktop */
+/* ===== SIDEBAR (desktop only) ===== */
 .sidebar {
   display: none;
   position: fixed;
@@ -52,699 +60,577 @@ body {
   height: 100vh;
   background: var(--card);
   border-right: 1px solid var(--border);
-  padding: 24px 0;
   z-index: 100;
   flex-direction: column;
 }
 .sidebar-brand {
-  padding: 0 24px 24px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 8px;
+  padding: 24px 20px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  background-clip: text;
 }
 .sidebar-brand h1 {
   font-size: 18px;
   font-weight: 700;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
-.sidebar-nav { flex: 1; padding: 8px 12px; }
+.sidebar-nav { padding: 12px 0; flex: 1; }
 .sidebar-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-radius: var(--radius-sm);
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 20px;
   color: var(--text-muted);
   cursor: pointer;
+  font-size: 15px; font-weight: 500;
   transition: all 0.2s;
-  font-size: 14px;
-  font-weight: 500;
-  margin-bottom: 2px;
-  user-select: none;
+  border-left: 3px solid transparent;
 }
 .sidebar-nav-item:hover { background: var(--card-hover); color: var(--text); }
-.sidebar-nav-item.active { background: var(--accent); color: #fff; }
-.sidebar-nav-item span.icon { font-size: 18px; width: 24px; text-align: center; }
+.sidebar-nav-item.active {
+  color: var(--accent);
+  background: rgba(108, 99, 255, 0.08);
+  border-left-color: var(--accent);
+}
+.sidebar-nav-item .icon { font-size: 18px; width: 24px; text-align: center; }
 
-/* Bottom nav — mobile */
+/* ===== BOTTOM NAV (mobile) ===== */
 .bottom-nav {
+  display: flex;
   position: fixed;
   bottom: 0; left: 0; right: 0;
   height: var(--nav-height);
   background: var(--card);
   border-top: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-around;
   z-index: 100;
   padding-bottom: env(safe-area-inset-bottom, 0);
 }
 .bottom-nav-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  cursor: pointer;
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 3px;
   color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px; font-weight: 500;
   transition: color 0.2s;
-  font-size: 10px;
-  font-weight: 500;
-  padding: 6px 12px;
-  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .bottom-nav-item .icon { font-size: 22px; }
 .bottom-nav-item.active { color: var(--accent); }
-.bottom-nav-item:hover { color: var(--text-muted); }
 
-/* Main content */
-.main {
-  padding: 20px 16px calc(var(--nav-height) + 20px);
-  max-width: 900px;
-  margin: 0 auto;
-}
+/* ===== MAIN CONTENT ===== */
+.main { padding: 16px 16px calc(var(--nav-height) + 16px); }
 
-/* Pages */
-.page { display: none; animation: fadeIn 0.3s ease; }
+/* ===== PAGES ===== */
+.page { display: none; animation: fadeIn 0.25s ease; }
 .page.active { display: block; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-/* Page header */
+/* ===== PAGE HEADER ===== */
 .page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 24px;
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 20px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-radius: var(--radius);
 }
 .page-header h2 {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 20px; font-weight: 700; color: #fff;
 }
 
-/* Status dot */
+/* ===== STATUS DOT ===== */
 .status-dot {
+  display: inline-block;
   width: 10px; height: 10px;
   border-radius: 50%;
-  display: inline-block;
   margin-left: 8px;
   vertical-align: middle;
 }
-.status-dot.online { background: var(--green); box-shadow: 0 0 8px rgba(34,197,94,0.5); }
-.status-dot.offline { background: var(--red); box-shadow: 0 0 8px rgba(239,68,68,0.5); }
+.status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.status-dot.offline { background: var(--red); }
 
-/* Cards */
+/* ===== CARDS ===== */
 .card {
   background: var(--card);
-  border-radius: var(--radius);
   border: 1px solid var(--border);
-  padding: 20px;
-  margin-bottom: 16px;
-}
-
-/* Stats grid */
-.stats-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 20px;
-}
-.stat-card {
-  background: var(--card);
   border-radius: var(--radius);
-  border: 1px solid var(--border);
   padding: 16px;
-  text-align: center;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+  transition: border-color 0.2s;
+  width: 100%;
 }
-.stat-card .stat-value {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--accent);
-  margin-bottom: 4px;
-}
-.stat-card .stat-label {
-  font-size: 12px;
+.card:hover { border-color: var(--accent); }
+.card-title {
+  font-size: 14px; font-weight: 600;
   color: var(--text-muted);
+  margin-bottom: 12px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
-/* Toggle switch */
-.toggle-container {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  background: var(--card);
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
+/* ===== STATS GRID ===== */
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
   margin-bottom: 16px;
 }
-.toggle-label {
-  font-size: 14px;
-  font-weight: 600;
-}
-.toggle-sublabel {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-top: 2px;
-}
-.toggle {
-  position: relative;
-  width: 52px; height: 28px;
-  cursor: pointer;
-}
-.toggle input { display: none; }
-.toggle-slider {
-  position: absolute;
-  inset: 0;
-  background: #333;
-  border-radius: 14px;
-  transition: background 0.3s;
-}
-.toggle-slider::before {
-  content: '';
-  position: absolute;
-  width: 22px; height: 22px;
-  left: 3px; top: 3px;
-  background: #fff;
-  border-radius: 50%;
-  transition: transform 0.3s;
-}
-.toggle input:checked + .toggle-slider { background: var(--green); }
-.toggle input:checked + .toggle-slider::before { transform: translateX(24px); }
-
-/* Big WA toggle */
-.wa-toggle-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 20px;
+.stat-card {
   background: var(--card);
-  border-radius: var(--radius);
   border: 1px solid var(--border);
-  margin-bottom: 20px;
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+  transition: border-color 0.2s;
 }
-.wa-toggle-card .wa-status {
-  font-size: 16px;
-  font-weight: 700;
+.stat-card:hover { border-color: var(--accent); }
+.stat-value {
+  font-size: 28px; font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
-.wa-toggle-card .wa-status.on { color: var(--green); }
-.wa-toggle-card .wa-status.off { color: var(--red); }
-.big-toggle {
-  position: relative;
-  width: 64px; height: 34px;
-  cursor: pointer;
+.stat-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* ===== WA TOGGLE (big, prominent) ===== */
+.wa-toggle-wrap {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-bottom: 16px;
 }
-.big-toggle input { display: none; }
-.big-toggle .toggle-slider {
-  position: absolute;
-  inset: 0;
+.wa-status { font-size: 16px; font-weight: 700; }
+.wa-status.on { color: var(--green); }
+.wa-status.off { color: var(--red); }
+
+.wa-switch { position: relative; width: 64px; height: 34px; flex-shrink: 0; }
+.wa-switch input { opacity: 0; width: 0; height: 0; }
+.wa-switch .slider {
+  position: absolute; inset: 0;
   background: var(--red);
-  border-radius: 17px;
+  border-radius: 34px;
+  cursor: pointer;
   transition: background 0.3s;
 }
-.big-toggle .toggle-slider::before {
+.wa-switch .slider::before {
   content: '';
   position: absolute;
-  width: 28px; height: 28px;
-  left: 3px; top: 3px;
+  width: 26px; height: 26px;
+  left: 4px; bottom: 4px;
   background: #fff;
   border-radius: 50%;
   transition: transform 0.3s;
 }
-.big-toggle input:checked + .toggle-slider { background: var(--green); }
-.big-toggle input:checked + .toggle-slider::before { transform: translateX(30px); }
+.wa-switch input:checked + .slider { background: var(--green); }
+.wa-switch input:checked + .slider::before { transform: translateX(30px); }
 
-/* Activity list */
-.activity-list { list-style: none; }
+/* Regular toggle (settings) */
+.toggle { position: relative; width: 48px; height: 26px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle .slider {
+  position: absolute; inset: 0;
+  background: var(--text-dim);
+  border-radius: 26px;
+  cursor: pointer;
+  transition: background 0.3s;
+}
+.toggle .slider::before {
+  content: '';
+  position: absolute;
+  width: 20px; height: 20px;
+  left: 3px; bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.3s;
+}
+.toggle input:checked + .slider { background: var(--green); }
+.toggle input:checked + .slider::before { transform: translateX(22px); }
+
+/* ===== ACTIVITY LIST ===== */
 .activity-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  display: flex; align-items: flex-start; gap: 12px;
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
 }
 .activity-item:last-child { border-bottom: none; }
 .activity-dir {
-  font-size: 18px;
   width: 32px; height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   border-radius: 50%;
-  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; flex-shrink: 0;
 }
-.activity-dir.incoming { background: rgba(108,99,255,0.15); }
-.activity-dir.outgoing { background: rgba(34,197,94,0.15); }
+.activity-dir.incoming { background: rgba(108,99,255,0.15); color: var(--accent); }
+.activity-dir.outgoing { background: rgba(34,197,94,0.15); color: var(--green); }
 .activity-content { flex: 1; min-width: 0; }
-.activity-name { font-size: 13px; font-weight: 600; }
-.activity-msg {
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-top: 2px;
-}
-.activity-time { font-size: 11px; color: var(--text-dim); flex-shrink: 0; margin-top: 2px; }
+.activity-name { font-size: 14px; font-weight: 600; }
+.activity-msg { font-size: 13px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.activity-time { font-size: 11px; color: var(--text-dim); white-space: nowrap; flex-shrink: 0; }
 
-/* Search bar */
+/* ===== SEARCH ===== */
 .search-bar {
   position: relative;
   margin-bottom: 16px;
 }
 .search-bar input {
   width: 100%;
-  padding: 12px 16px 12px 40px;
+  padding: 12px 16px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   color: var(--text);
-  font-size: 14px;
-  font-family: inherit;
+  font-size: 16px;
   outline: none;
   transition: border-color 0.2s;
 }
 .search-bar input:focus { border-color: var(--accent); }
-.search-bar .search-icon {
-  position: absolute;
-  left: 14px; top: 50%;
-  transform: translateY(-50%);
-  color: var(--text-dim);
-  font-size: 16px;
-}
+.search-bar input::placeholder { color: var(--text-dim); }
 
-/* Contact / item list */
+/* ===== LIST ITEMS ===== */
 .list-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  display: flex; align-items: center; gap: 12px;
   padding: 14px 16px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   margin-bottom: 8px;
-  transition: background 0.2s;
+  transition: border-color 0.2s;
 }
-.list-item:hover { background: var(--card-hover); }
+.list-item:hover { border-color: var(--accent); }
 .list-item-info { flex: 1; min-width: 0; }
-.list-item-name { font-size: 14px; font-weight: 600; }
-.list-item-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-.list-item-actions { display: flex; gap: 6px; }
+.list-item-name { font-size: 15px; font-weight: 600; }
+.list-item-sub { font-size: 13px; color: var(--text-muted); }
+.list-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
 
-/* Badges */
+/* ===== BADGES ===== */
 .badge {
   display: inline-block;
-  padding: 3px 8px;
+  padding: 3px 10px;
   border-radius: 20px;
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 11px; font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  flex-shrink: 0;
 }
-.badge-staff { background: rgba(108,99,255,0.2); color: var(--accent); }
-.badge-business { background: rgba(34,197,94,0.2); color: var(--green); }
-.badge-supplier { background: rgba(245,158,11,0.2); color: var(--orange); }
-.badge-general { background: rgba(160,160,176,0.2); color: var(--text-muted); }
-.badge-high { background: rgba(239,68,68,0.2); color: var(--red); }
-.badge-medium { background: rgba(245,158,11,0.2); color: var(--orange); }
-.badge-low { background: rgba(34,197,94,0.2); color: var(--green); }
+.badge-general { background: rgba(108,99,255,0.15); color: var(--accent); }
+.badge-staff { background: rgba(34,197,94,0.15); color: var(--green); }
+.badge-business { background: rgba(245,158,11,0.15); color: var(--orange); }
+.badge-supplier { background: rgba(239,68,68,0.15); color: var(--red); }
+.badge-high { background: rgba(239,68,68,0.15); color: var(--red); }
+.badge-medium { background: rgba(245,158,11,0.15); color: var(--orange); }
+.badge-low { background: rgba(34,197,94,0.15); color: var(--green); }
 
-/* Buttons */
+/* ===== BUTTONS ===== */
 .btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 16px;
-  border: none;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-weight: 600;
-  font-family: inherit;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 12px 20px;
+  border: none; border-radius: var(--radius-sm);
+  font-size: 14px; font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
-  white-space: nowrap;
+  min-height: 48px;
+  -webkit-tap-highlight-color: transparent;
 }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-primary { background: var(--accent); color: #fff; }
-.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-ghost { background: transparent; color: var(--text-muted); }
+.btn-ghost:hover { background: var(--card-hover); color: var(--text); }
 .btn-green { background: var(--green); color: #fff; }
-.btn-green:hover:not(:disabled) { background: #1aaa4a; }
+.btn-green:hover { opacity: 0.9; }
 .btn-red { background: var(--red); color: #fff; }
-.btn-red:hover:not(:disabled) { background: #dc2626; }
-.btn-ghost {
-  background: transparent;
-  color: var(--text-muted);
-  padding: 6px 10px;
-}
-.btn-ghost:hover { color: var(--text); background: var(--card-hover); }
-.btn-sm { padding: 6px 12px; font-size: 12px; }
-.btn-icon {
-  width: 32px; height: 32px;
-  padding: 0;
-  border-radius: 8px;
-}
+.btn-red:hover { opacity: 0.9; }
+.btn-icon { padding: 8px; min-height: 40px; min-width: 40px; }
+.btn-sm { padding: 8px 14px; font-size: 13px; min-height: 40px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* FAB */
+/* ===== FAB ===== */
 .fab {
   position: fixed;
   bottom: calc(var(--nav-height) + 20px);
   right: 20px;
   width: 56px; height: 56px;
-  background: var(--accent);
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
   color: #fff;
   border: none;
-  border-radius: 50%;
   font-size: 28px;
   cursor: pointer;
-  box-shadow: 0 4px 20px rgba(108,99,255,0.4);
-  transition: transform 0.2s, background 0.2s;
+  display: none;
+  align-items: center; justify-content: center;
+  box-shadow: 0 4px 16px rgba(108,99,255,0.4);
   z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.2s;
 }
-.fab:hover { transform: scale(1.1); background: var(--accent-hover); }
+.fab:active { transform: scale(0.92); }
 
-/* Modal */
+/* ===== MODALS ===== */
 .modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.6);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex; align-items: flex-end; justify-content: center;
   z-index: 200;
-  animation: fadeIn 0.2s ease;
-  padding: 16px;
+  padding: 0;
 }
 .modal {
-  background: var(--card);
-  border-radius: 16px 16px 0 0;
+  background: var(--bg);
   width: 100%;
-  max-width: 480px;
-  max-height: 85vh;
+  max-height: 90vh;
+  border-radius: var(--radius) var(--radius) 0 0;
   overflow-y: auto;
   animation: slideUp 0.3s ease;
-  border: 1px solid var(--border);
 }
 @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
 .modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 20px 20px 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0;
+  background: var(--bg);
+  z-index: 1;
 }
 .modal-header h3 { font-size: 18px; font-weight: 700; }
 .modal-body { padding: 20px; }
 .modal-footer {
-  padding: 0 20px 20px;
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
+  display: flex; gap: 12px; justify-content: flex-end;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  position: sticky; bottom: 0;
+  background: var(--bg);
 }
 
-/* Form */
+/* ===== FORM ===== */
 .form-group { margin-bottom: 16px; }
-.form-group label {
-  display: block;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
+.form-group label { display: block; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
 .form-control {
   width: 100%;
-  padding: 10px 14px;
-  background: var(--bg);
+  padding: 12px 16px;
+  background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
-  font-size: 14px;
-  font-family: inherit;
+  font-size: 16px;
   outline: none;
+  font-family: inherit;
   transition: border-color 0.2s;
 }
 .form-control:focus { border-color: var(--accent); }
-select.form-control { appearance: none; cursor: pointer; }
-textarea.form-control { resize: vertical; min-height: 80px; }
+textarea.form-control { min-height: 80px; resize: vertical; }
+select.form-control { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23A0A0B0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; }
 
-/* Tabs */
+/* ===== TABS ===== */
 .tabs {
-  display: flex;
-  gap: 4px;
-  background: var(--card);
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  padding: 4px;
+  display: flex; gap: 0;
   margin-bottom: 16px;
+  background: var(--card);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  border: 1px solid var(--border);
 }
 .tab {
   flex: 1;
   padding: 10px;
   text-align: center;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 14px; font-weight: 600;
   color: var(--text-muted);
   cursor: pointer;
+  border-radius: 6px;
   transition: all 0.2s;
-  user-select: none;
-  border: none;
-  background: none;
-  font-family: inherit;
+  min-height: 48px;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
 }
 .tab.active { background: var(--accent); color: #fff; }
-.tab:hover:not(.active) { color: var(--text); }
 
-/* Meeting card */
+/* ===== MEETING CARD ===== */
 .meeting-card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
   margin-bottom: 12px;
+  transition: border-color 0.2s;
 }
-.meeting-card .mc-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-.meeting-card .mc-name { font-size: 15px; font-weight: 600; }
-.meeting-card .mc-time { font-size: 11px; color: var(--text-dim); }
-.meeting-card .mc-msg {
-  font-size: 13px;
-  color: var(--text-muted);
-  margin-bottom: 4px;
-  line-height: 1.5;
-}
-.meeting-card .mc-phone { font-size: 12px; color: var(--text-dim); margin-bottom: 12px; }
-.meeting-card .mc-actions { display: flex; gap: 8px; }
+.meeting-card:hover { border-color: var(--accent); }
 .meeting-card.confirmed { border-left: 3px solid var(--green); }
 .meeting-card.declined { border-left: 3px solid var(--red); }
+.mc-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.mc-name { font-size: 16px; font-weight: 600; }
+.mc-time { font-size: 12px; color: var(--text-dim); }
+.mc-msg { font-size: 14px; color: var(--text-muted); margin-bottom: 8px; }
+.mc-phone { font-size: 13px; color: var(--text-dim); margin-bottom: 12px; }
+.mc-actions { display: flex; gap: 8px; }
 
-/* Task card */
+/* ===== TASK CARD ===== */
 .task-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  display: flex; align-items: center; gap: 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   padding: 14px 16px;
+  margin-bottom: 8px;
+  transition: border-color 0.2s;
+}
+.task-card:hover { border-color: var(--accent); }
+.task-card.done { opacity: 0.5; }
+.task-card.done .task-title { text-decoration: line-through; }
+.task-checkbox {
+  width: 24px; height: 24px;
+  border: 2px solid var(--text-dim);
+  border-radius: 6px;
+  flex-shrink: 0;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+.task-checkbox.checked { background: var(--green); border-color: var(--green); }
+.task-checkbox.checked::after { content: '\2713'; color: #fff; font-size: 14px; font-weight: 700; }
+.task-info { flex: 1; min-width: 0; }
+.task-title { font-size: 15px; font-weight: 500; }
+.task-meta { display: flex; gap: 8px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+.task-due { font-size: 12px; color: var(--text-dim); }
+
+/* ===== SETTINGS ===== */
+.settings-section {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  margin-bottom: 8px;
+  padding: 20px;
+  margin-bottom: 16px;
 }
-.task-card.done { opacity: 0.5; }
-.task-checkbox {
-  width: 22px; height: 22px;
-  border: 2px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-top: 1px;
-  transition: all 0.2s;
-  background: transparent;
-}
-.task-checkbox.checked { background: var(--accent); border-color: var(--accent); }
-.task-checkbox.checked::after { content: '\2713'; color: #fff; font-size: 14px; font-weight: 700; }
-.task-info { flex: 1; min-width: 0; }
-.task-title { font-size: 14px; font-weight: 600; }
-.task-card.done .task-title { text-decoration: line-through; }
-.task-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
-.task-due { font-size: 11px; color: var(--text-dim); }
-
-/* Settings section */
-.settings-section {
-  margin-bottom: 24px;
-}
-.settings-section-title {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: 12px;
-}
+.settings-section-title { font-size: 14px; font-weight: 700; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px; }
 .settings-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  margin-bottom: -1px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  min-height: 48px;
 }
-.settings-row:first-of-type { border-radius: var(--radius) var(--radius) 0 0; }
-.settings-row:last-of-type { border-radius: 0 0 var(--radius) var(--radius); margin-bottom: 0; }
-.settings-row:only-of-type { border-radius: var(--radius); }
-.settings-row-label { font-size: 14px; font-weight: 500; }
-.time-inputs { display: flex; align-items: center; gap: 8px; }
+.settings-row:last-child { border-bottom: none; }
+.settings-row label { font-size: 15px; font-weight: 500; }
+.time-inputs { display: flex; gap: 8px; align-items: center; }
 .time-inputs input {
-  width: 80px;
-  padding: 6px 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  font-size: 13px;
-  font-family: inherit;
-  text-align: center;
-  outline: none;
+  width: 100px; padding: 8px 10px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 15px; text-align: center;
 }
-.time-inputs input:focus { border-color: var(--accent); }
-.time-inputs span { color: var(--text-dim); font-size: 12px; }
+.danger-zone { border-color: rgba(239,68,68,0.3); }
+.danger-zone .btn { margin-bottom: 8px; width: 100%; }
 
-/* Danger zone */
-.danger-zone .btn {
-  width: 100%;
-  margin-bottom: 8px;
-}
-
-/* Toast */
+/* ===== TOAST ===== */
 .toast-container {
   position: fixed;
-  bottom: calc(var(--nav-height) + 16px);
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: calc(var(--nav-height) + 12px);
+  left: 16px; right: 16px;
   z-index: 300;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: center;
+  display: flex; flex-direction: column; gap: 8px;
   pointer-events: none;
 }
 .toast {
-  padding: 12px 20px;
+  padding: 14px 20px;
   border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-weight: 500;
-  animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+  font-size: 14px; font-weight: 500;
+  animation: toastIn 0.3s ease;
   pointer-events: auto;
-  max-width: 340px;
-  text-align: center;
 }
+@keyframes toastIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
 .toast-success { background: var(--green); color: #fff; }
 .toast-error { background: var(--red); color: #fff; }
 .toast-info { background: var(--accent); color: #fff; }
-@keyframes toastIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateY(-8px); } }
+.toast-warning { background: var(--orange); color: #fff; }
 
-/* Skeleton */
+/* ===== SKELETON ===== */
 .skeleton {
   background: linear-gradient(90deg, var(--card) 25%, var(--card-hover) 50%, var(--card) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: var(--radius-sm);
+  height: 20px;
 }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-.skeleton-text { height: 14px; margin-bottom: 8px; width: 80%; }
-.skeleton-title { height: 20px; margin-bottom: 12px; width: 60%; }
-.skeleton-card { height: 80px; margin-bottom: 12px; border-radius: var(--radius); }
-.skeleton-stat { height: 90px; border-radius: var(--radius); }
 
-/* Spinner */
+/* ===== SPINNER ===== */
 .spinner {
-  width: 16px; height: 16px;
+  display: inline-block;
+  width: 18px; height: 18px;
   border: 2px solid rgba(255,255,255,0.3);
   border-top-color: #fff;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
-  display: inline-block;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Empty state */
-.empty-state {
-  text-align: center;
-  padding: 40px 20px;
-  color: var(--text-dim);
-}
-.empty-state .empty-icon { font-size: 48px; margin-bottom: 12px; }
-.empty-state p { font-size: 14px; }
+/* ===== EMPTY STATE ===== */
+.empty-state { text-align: center; padding: 40px 20px; color: var(--text-dim); }
+.empty-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.5; }
+.empty-state p { font-size: 15px; }
 
-/* Desktop */
-@media (min-width: 769px) {
-  .sidebar { display: flex; }
-  .bottom-nav { display: none; }
-  .main {
-    margin-left: var(--sidebar-width);
-    padding: 32px 40px;
-    max-width: calc(900px + var(--sidebar-width));
-  }
-  .fab { bottom: 24px; right: 40px; }
-  .modal-overlay { align-items: center; }
-  .modal { border-radius: 16px; }
-  .toast-container { bottom: 24px; }
-}
-
-@media (min-width: 1024px) {
-  .stats-grid { grid-template-columns: repeat(4, 1fr); }
-}
-/* Login Screen */
+/* ===== LOGIN SCREEN ===== */
 #loginScreen {
   position: fixed; inset: 0; z-index: 9999;
   background: var(--bg);
   display: flex; align-items: center; justify-content: center;
-  flex-direction: column;
 }
 .login-box {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 40px;
+  padding: 40px 24px;
   width: 90%; max-width: 360px;
   box-shadow: var(--shadow);
   text-align: center;
 }
-.login-box h2 { margin-bottom: 24px; font-size: 1.3rem; font-weight: 600; }
+.login-box h2 {
+  margin-bottom: 24px; font-size: 22px; font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
 .login-box input {
-  width: 100%; padding: 12px 16px;
+  width: 100%; padding: 14px 16px;
   background: var(--bg); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-size: 1rem; outline: none;
+  font-size: 16px; outline: none;
   margin-bottom: 16px;
 }
 .login-box input:focus { border-color: var(--accent); }
 .login-box .login-btn {
-  width: 100%; padding: 12px;
-  background: var(--accent); color: #fff;
-  border: none; border-radius: var(--radius-sm);
-  font-size: 1rem; font-weight: 600; cursor: pointer;
-  transition: background 0.2s;
+  width: 100%; padding: 14px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  color: #fff; border: none; border-radius: var(--radius-sm);
+  font-size: 16px; font-weight: 600; cursor: pointer;
+  min-height: 48px;
+  transition: opacity 0.2s;
 }
-.login-box .login-btn:hover { background: var(--accent-hover); }
+.login-box .login-btn:hover { opacity: 0.9; }
 .login-box .login-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.login-error {
-  color: var(--red); font-size: 0.85rem;
-  margin-bottom: 12px; min-height: 20px;
+.login-error { color: var(--red); font-size: 14px; margin-bottom: 12px; min-height: 20px; }
+
+/* ===== DESKTOP ===== */
+@media (min-width: 769px) {
+  .sidebar { display: flex; }
+  .bottom-nav { display: none; }
+  .main { margin-left: var(--sidebar-width); padding: 24px 32px; }
+  .stats-grid { grid-template-columns: repeat(4, 1fr); }
+  .modal-overlay { align-items: center; padding: 24px; }
+  .modal {
+    max-width: 520px;
+    border-radius: var(--radius);
+    max-height: 85vh;
+  }
+  .fab { bottom: 32px; right: 32px; }
+  .toast-container {
+    bottom: 24px;
+    left: auto; right: 32px;
+    width: 360px;
+  }
 }
 </style>
 </head>
@@ -787,7 +673,7 @@ textarea.form-control { resize: vertical; min-height: 80px; }
   </div>
 </nav>
 
-<!-- Bottom nav (mobile) -->
+<!-- Bottom Nav (mobile) -->
 <nav class="bottom-nav" id="bottomNav">
   <div class="bottom-nav-item active" data-page="dashboard">
     <span class="icon">&#x1F4CA;</span>
@@ -811,151 +697,131 @@ textarea.form-control { resize: vertical; min-height: 80px; }
   </div>
 </nav>
 
-<!-- Toast container -->
+<!-- Toast Container -->
 <div class="toast-container" id="toastContainer"></div>
 
-<!-- Main content -->
+<!-- Main Content -->
 <div class="main">
 
-  <!-- PAGE: DASHBOARD -->
+  <!-- Dashboard -->
   <div class="page active" id="page-dashboard">
     <div class="page-header">
       <h2>Dashboard <span class="status-dot offline" id="statusDotMain"></span></h2>
     </div>
 
-    <!-- WA Toggle -->
-    <div class="wa-toggle-card">
-      <div>
-        <div class="wa-status off" id="waStatusLabel">WhatsApp OFF</div>
-        <div style="font-size:12px;color:var(--text-dim);margin-top:2px">Auto-reply status</div>
-      </div>
-      <label class="big-toggle">
+    <div class="wa-toggle-wrap">
+      <span class="wa-status on" id="waStatusLabel">WhatsApp ON</span>
+      <label class="wa-switch">
         <input type="checkbox" id="waToggleDash" onchange="toggleWA(this.checked)">
-        <div class="toggle-slider"></div>
+        <span class="slider"></span>
       </label>
     </div>
 
-    <!-- Stats -->
     <div class="stats-grid" id="statsGrid">
-      <div class="stat-card"><div class="skeleton skeleton-stat"></div></div>
-      <div class="stat-card"><div class="skeleton skeleton-stat"></div></div>
-      <div class="stat-card"><div class="skeleton skeleton-stat"></div></div>
-      <div class="stat-card"><div class="skeleton skeleton-stat"></div></div>
+      <div class="stat-card"><div class="skeleton" style="height:36px;margin-bottom:8px"></div><div class="skeleton" style="height:14px;width:70%"></div></div>
+      <div class="stat-card"><div class="skeleton" style="height:36px;margin-bottom:8px"></div><div class="skeleton" style="height:14px;width:70%"></div></div>
+      <div class="stat-card"><div class="skeleton" style="height:36px;margin-bottom:8px"></div><div class="skeleton" style="height:14px;width:70%"></div></div>
+      <div class="stat-card"><div class="skeleton" style="height:36px;margin-bottom:8px"></div><div class="skeleton" style="height:14px;width:70%"></div></div>
     </div>
 
-    <!-- Cost card -->
-    <div class="card" id="costCard">
-      <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Today's Cost</div>
-      <div style="font-size:24px;font-weight:700;color:var(--accent)" id="costValue">--</div>
-      <div style="font-size:11px;color:var(--text-dim);margin-top:4px" id="costBreakdown"></div>
-    </div>
-
-    <!-- Recent Activity -->
     <div class="card">
-      <div style="font-size:14px;font-weight:700;margin-bottom:12px">Recent Activity</div>
-      <ul class="activity-list" id="activityList">
-        <div class="skeleton skeleton-card"></div>
-        <div class="skeleton skeleton-card"></div>
-        <div class="skeleton skeleton-card"></div>
+      <div class="card-title">API Cost Today</div>
+      <div id="costValue" style="font-size:24px;font-weight:700;color:var(--accent)">--</div>
+      <div id="costBreakdown" style="font-size:13px;color:var(--text-muted);margin-top:4px">Loading...</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Recent Activity</div>
+      <ul id="activityList" style="list-style:none">
+        <li><div class="skeleton" style="height:48px;margin-bottom:8px"></div></li>
+        <li><div class="skeleton" style="height:48px;margin-bottom:8px"></div></li>
+        <li><div class="skeleton" style="height:48px"></div></li>
       </ul>
     </div>
   </div>
 
-  <!-- PAGE: CONTACTS -->
+  <!-- Contacts -->
   <div class="page" id="page-contacts">
     <div class="page-header">
       <h2>Contacts</h2>
     </div>
     <div class="search-bar">
-      <span class="search-icon">&#x1F50D;</span>
       <input type="text" id="contactSearch" placeholder="Search contacts..." oninput="filterContacts(this.value)">
     </div>
-    <div id="contactsList">
-      <div class="skeleton skeleton-card"></div>
-      <div class="skeleton skeleton-card"></div>
-      <div class="skeleton skeleton-card"></div>
-    </div>
-    <button class="fab" id="fabContacts" onclick="openContactModal()">+</button>
+    <div id="contactsList"></div>
   </div>
 
-  <!-- PAGE: MEETINGS -->
+  <!-- Meetings -->
   <div class="page" id="page-meetings">
     <div class="page-header">
       <h2>Meetings</h2>
     </div>
     <div class="tabs">
-      <button class="tab active" onclick="setMeetingTab('pending', this)">Pending</button>
-      <button class="tab" onclick="setMeetingTab('history', this)">History</button>
+      <div class="tab active" onclick="setMeetingTab('pending', this)">Pending</div>
+      <div class="tab" onclick="setMeetingTab('history', this)">History</div>
     </div>
-    <div id="meetingsList">
-      <div class="skeleton skeleton-card"></div>
-      <div class="skeleton skeleton-card"></div>
-    </div>
+    <div id="meetingsList"></div>
   </div>
 
-  <!-- PAGE: TASKS -->
+  <!-- Tasks -->
   <div class="page" id="page-tasks">
     <div class="page-header">
       <h2>Tasks</h2>
     </div>
     <div class="tabs">
-      <button class="tab active" onclick="setTaskTab('all', this)">All</button>
-      <button class="tab" onclick="setTaskTab('pending', this)">Pending</button>
-      <button class="tab" onclick="setTaskTab('done', this)">Done</button>
+      <div class="tab active" onclick="setTaskTab('all', this)">All</div>
+      <div class="tab" onclick="setTaskTab('pending', this)">Pending</div>
+      <div class="tab" onclick="setTaskTab('done', this)">Done</div>
     </div>
-    <div id="tasksList">
-      <div class="skeleton skeleton-card"></div>
-      <div class="skeleton skeleton-card"></div>
-    </div>
-    <button class="fab" id="fabTasks" onclick="openTaskModal()">+</button>
+    <div id="tasksList"></div>
   </div>
 
-  <!-- PAGE: SETTINGS -->
+  <!-- Settings -->
   <div class="page" id="page-settings">
     <div class="page-header">
       <h2>Settings</h2>
     </div>
 
     <div class="settings-section">
-      <div class="settings-section-title">WhatsApp Settings</div>
-      <div class="settings-row" style="border-radius:var(--radius) var(--radius) 0 0">
-        <span class="settings-row-label">Auto-Reply</span>
+      <div class="settings-section-title">WhatsApp</div>
+      <div class="settings-row">
+        <label>Auto-Reply</label>
         <label class="toggle">
           <input type="checkbox" id="waToggleSettings" onchange="toggleWA(this.checked)">
-          <div class="toggle-slider"></div>
+          <span class="slider"></span>
         </label>
       </div>
       <div class="settings-row">
-        <span class="settings-row-label">Reply Hours</span>
+        <label>Reply Hours</label>
         <div class="time-inputs">
           <input type="time" id="replyFrom" value="08:00" onchange="saveSetting('reply_hours_from', this.value)">
-          <span>to</span>
-          <input type="time" id="replyTo" value="22:00" onchange="saveSetting('reply_hours_to', this.value)">
+          <span style="color:var(--text-dim)">to</span>
+          <input type="time" id="replyTo" value="23:00" onchange="saveSetting('reply_hours_to', this.value)">
         </div>
-      </div>
-      <div class="settings-row" style="border-radius:0 0 var(--radius) var(--radius)">
-        <span class="settings-row-label">Privacy Mode</span>
-        <label class="toggle">
-          <input type="checkbox" id="privacyToggle" onchange="saveSetting('privacy_mode', this.checked ? 'true' : 'false')">
-          <div class="toggle-slider"></div>
-        </label>
       </div>
     </div>
 
     <div class="settings-section">
-      <div class="settings-section-title">Notifications</div>
-      <div class="settings-row" style="border-radius:var(--radius) var(--radius) 0 0">
-        <span class="settings-row-label">Notify All Messages</span>
+      <div class="settings-section-title">Privacy & Notifications</div>
+      <div class="settings-row">
+        <label>Privacy Mode</label>
         <label class="toggle">
-          <input type="checkbox" id="notifyAllToggle" onchange="saveSetting('notify_all', this.checked ? 'true' : 'false')">
-          <div class="toggle-slider"></div>
+          <input type="checkbox" id="privacyToggle" onchange="saveSetting('privacy_mode', this.checked ? 'true' : 'false')">
+          <span class="slider"></span>
         </label>
       </div>
-      <div class="settings-row" style="border-radius:0 0 var(--radius) var(--radius)">
-        <span class="settings-row-label">Notify Meetings Only</span>
+      <div class="settings-row">
+        <label>Notify All Messages</label>
+        <label class="toggle">
+          <input type="checkbox" id="notifyAllToggle" onchange="saveSetting('notify_all', this.checked ? 'true' : 'false')">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="settings-row">
+        <label>Meetings Only</label>
         <label class="toggle">
           <input type="checkbox" id="notifyMeetingsToggle" onchange="saveSetting('notify_meetings_only', this.checked ? 'true' : 'false')">
-          <div class="toggle-slider"></div>
+          <span class="slider"></span>
         </label>
       </div>
     </div>
@@ -964,10 +830,17 @@ textarea.form-control { resize: vertical; min-height: 80px; }
       <div class="settings-section-title" style="color:var(--red)">Danger Zone</div>
       <button class="btn btn-red" onclick="clearWAHistory()">Clear WhatsApp History</button>
       <button class="btn btn-red" onclick="clearAllTasks()">Clear All Tasks</button>
-      <button class="btn" style="background:var(--text-dim);color:#fff;margin-top:12px;width:100%" onclick="doLogout()">Logout</button>
+      <button class="btn" style="background:var(--text-dim);color:#fff;margin-top:4px" onclick="doLogout()">Logout</button>
     </div>
   </div>
-</div>
+
+</div><!-- /main -->
+
+<!-- FABs -->
+<button class="fab" id="fabContacts" style="display:none" onclick="openContactModal()">+</button>
+<button class="fab" id="fabTasks" style="display:none" onclick="openTaskModal()">+</button>
+
+</div><!-- /appContainer -->
 
 <!-- Contact Modal -->
 <div class="modal-overlay" id="contactModal" style="display:none" onclick="if(event.target===this)closeModal('contactModal')">
@@ -984,7 +857,7 @@ textarea.form-control { resize: vertical; min-height: 80px; }
       </div>
       <div class="form-group">
         <label>Phone</label>
-        <input type="tel" class="form-control" id="contactPhone" placeholder="+961 ...">
+        <input type="tel" class="form-control" id="contactPhone" placeholder="+258 ...">
       </div>
       <div class="form-group">
         <label>WhatsApp</label>
@@ -1051,7 +924,6 @@ textarea.form-control { resize: vertical; min-height: 80px; }
     </div>
   </div>
 </div>
-</div><!-- /appContainer -->
 
 <script>
 // ============================================================
@@ -1188,7 +1060,6 @@ function navigateTo(page) {
 
   localStorage.setItem('rabih_active_page', page);
 
-  // Load data on page visit
   if (page === 'dashboard') loadDashboard();
   if (page === 'contacts') loadContacts();
   if (page === 'meetings') loadMeetings();
@@ -1196,7 +1067,6 @@ function navigateTo(page) {
   if (page === 'settings') loadSettings();
 }
 
-// Set up nav clicks
 document.querySelectorAll('[data-page]').forEach(item => {
   item.addEventListener('click', () => navigateTo(item.dataset.page));
 });
@@ -1404,7 +1274,6 @@ async function toggleWA(enabled) {
   updateWALabel(enabled);
 
   try {
-    // Call Railway API to update file-based toggle AND Supabase
     const res = await apiCall('/wa-toggle', {
       method: 'POST',
       body: JSON.stringify({ enabled })
@@ -1412,7 +1281,6 @@ async function toggleWA(enabled) {
     if (res.error) throw new Error(res.error);
     showToast('WhatsApp ' + (enabled ? 'enabled' : 'disabled'), 'success');
   } catch (e) {
-    // Fallback: write directly to Supabase if API is down
     try {
       await sb.from('assistant_settings')
         .upsert({ key: 'wa_enabled', value: enabled ? 'true' : 'false', updated_at: new Date().toISOString() });
@@ -1590,11 +1458,11 @@ function renderMeetings(meetings) {
         <div class="mc-phone">${escapeHtml(m.requester_number || '')}</div>
         ${isPending ? `
           <div class="mc-actions">
-            <button class="btn btn-green btn-sm" id="confirm-${m.id}" onclick="handleMeeting('${m.id}', 'confirm', this)">Confirm</button>
-            <button class="btn btn-red btn-sm" id="decline-${m.id}" onclick="handleMeeting('${m.id}', 'decline', this)">Decline</button>
+            <button class="btn btn-green btn-sm" onclick="handleMeeting('${m.id}', 'confirm', this)">Confirm</button>
+            <button class="btn btn-red btn-sm" onclick="handleMeeting('${m.id}', 'decline', this)">Decline</button>
           </div>
         ` : `
-          <div style="font-size:12px;font-weight:600;color:${m.status === 'confirmed' ? 'var(--green)' : 'var(--red)'}">
+          <div style="font-size:13px;font-weight:600;color:${m.status === 'confirmed' ? 'var(--green)' : 'var(--red)'}">
             ${m.status === 'confirmed' ? 'Confirmed' : 'Declined'}
           </div>
         `}
@@ -1856,6 +1724,13 @@ function setupRealtime() {
 }
 
 // ============================================================
+// SERVICE WORKER
+// ============================================================
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+// ============================================================
 // INIT
 // ============================================================
 function appInit() {
@@ -1863,14 +1738,12 @@ function appInit() {
   navigateTo(savedPage);
   setupRealtime();
 
-  // Periodic status check every 60s
   setInterval(() => {
     const activePage = localStorage.getItem('rabih_active_page') || 'dashboard';
     if (activePage === 'dashboard') loadDashboardStats();
   }, 60000);
 }
 
-// Auth gate on page load
 if (checkAuth()) appInit();
 </script>
 </body>
