@@ -139,7 +139,10 @@ async function initWhatsApp(options) {
     });
 
     currentSock = sock;
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', function() {
+      saveCreds();
+      console.log('Baileys auth updated');
+    });
 
     sock.ev.on('connection.update', async function(update) {
       const { connection, lastDisconnect, qr } = update;

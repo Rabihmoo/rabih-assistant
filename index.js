@@ -50,6 +50,19 @@ const RABIH_CHAT_ID = '5140288064';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// Check wa_enabled from Supabase — returns true only if value is exactly 'true'
+async function isWaEnabledInDb() {
+  try {
+    var { data } = await supabase.from('assistant_settings').select('value').eq('key', 'wa_enabled').limit(1).single();
+    return data && data.value === 'true';
+  } catch(e) { return false; }
+}
+
+// Log wa_enabled on startup
+isWaEnabledInDb().then(function(enabled) {
+  console.log('STARTUP — wa_enabled in Supabase:', enabled);
+});
+
 // ========================= MEMORY =========================
 
 async function loadMemory() {
@@ -814,6 +827,27 @@ initWhatsApp({
 
   // Messages from other people — log to Supabase, forward to Telegram, NO auto-reply
   onOtherMessage: async function(text, senderNumber, senderJid) {
+    // ====== ABSOLUTE FIRST CHECK — wa_enabled from Supabase ======
+    var waEnabled = await isWaEnabledInDb();
+    if (!waEnabled) {
+      console.log('WA DISABLED - blocking reply to', senderNumber);
+      // Still log and forward, but guarantee no reply
+      try {
+        var contactInfo = await isApprovedContact(senderNumber);
+        var senderName = contactInfo ? contactInfo.name : senderNumber;
+        await supabase.from('whatsapp_logs').insert({
+          from_number: senderNumber,
+          from_name: senderName,
+          message: text,
+          direction: 'incoming',
+          replied: false
+        });
+        await sendTelegram(RABIH_CHAT_ID, '💬 WhatsApp from ' + senderName + ':\n' + text.substring(0, 500));
+      } catch(e) { console.error('WA log/forward error:', e.message); }
+      return null;
+    }
+    // =============================================================
+
     console.log('WhatsApp from other:', senderNumber, text.substring(0, 80));
     try {
       // Check if this is a checklist response first (always process)
@@ -823,18 +857,18 @@ initWhatsApp({
       }
 
       // Log to Supabase
-      var contactInfo = await isApprovedContact(senderNumber);
-      var senderName = contactInfo ? contactInfo.name : senderNumber;
+      var contactInfo2 = await isApprovedContact(senderNumber);
+      var senderName2 = contactInfo2 ? contactInfo2.name : senderNumber;
       try { await supabase.from('whatsapp_logs').insert({
         from_number: senderNumber,
-        from_name: senderName,
+        from_name: senderName2,
         message: text,
         direction: 'incoming',
         replied: false
       }); } catch(e) { console.error('WA log error:', e.message); }
 
       // Forward to Rabih on Telegram
-      await sendTelegram(RABIH_CHAT_ID, '💬 WhatsApp from ' + senderName + ':\n' + text.substring(0, 500));
+      await sendTelegram(RABIH_CHAT_ID, '💬 WhatsApp from ' + senderName2 + ':\n' + text.substring(0, 500));
 
       // No auto-reply — Rabih handles all contact replies manually
       return null;
@@ -1028,7 +1062,7 @@ app.get('/dashboard-stats', async function(req, res) {
       pending_meetings: meetRes.count || 0,
       tasks_due_today: taskRes.count || 0,
       cost_today: costToday,
-      wa_enabled: false,
+      wa_enabled: await isWaEnabledInDb(),
       bot_status: 'online'
     });
   } catch (err) {
