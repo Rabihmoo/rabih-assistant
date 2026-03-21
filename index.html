@@ -1051,6 +1051,7 @@ textarea.form-control { resize: vertical; min-height: 80px; }
     </div>
   </div>
 </div>
+</div><!-- /appContainer -->
 
 <script>
 // ============================================================
@@ -1403,13 +1404,20 @@ async function toggleWA(enabled) {
   updateWALabel(enabled);
 
   try {
-    const { error } = await sb
-      .from('assistant_settings')
-      .upsert({ key: 'wa_enabled', value: enabled ? 'true' : 'false', updated_at: new Date().toISOString() });
-    if (error) throw error;
+    // Call Railway API to update file-based toggle AND Supabase
+    const res = await apiCall('/wa-toggle', {
+      method: 'POST',
+      body: JSON.stringify({ enabled })
+    });
+    if (res.error) throw new Error(res.error);
     showToast('WhatsApp ' + (enabled ? 'enabled' : 'disabled'), 'success');
   } catch (e) {
-    showToast('Failed to update setting', 'error');
+    // Fallback: write directly to Supabase if API is down
+    try {
+      await sb.from('assistant_settings')
+        .upsert({ key: 'wa_enabled', value: enabled ? 'true' : 'false', updated_at: new Date().toISOString() });
+    } catch (e2) {}
+    showToast('Toggle saved to DB (server may be offline)', 'warning');
   }
 }
 
@@ -1658,6 +1666,7 @@ function renderTasks() {
           ${t.category ? `<span class="task-due">${escapeHtml(t.category)}</span>` : ''}
         </div>
       </div>
+      <button class="btn btn-ghost btn-icon btn-sm" onclick="editTask('${t.id}')" title="Edit">&#x270F;</button>
       <button class="btn btn-ghost btn-icon btn-sm" onclick="deleteTask('${t.id}')" title="Delete">&#x1F5D1;</button>
     </div>
   `).join('');
@@ -1683,6 +1692,18 @@ function openTaskModal() {
   document.getElementById('taskPriority').value = 'medium';
   document.getElementById('taskDueDate').value = '';
   document.getElementById('taskCategory').value = '';
+  openModal('taskModal');
+}
+
+function editTask(id) {
+  const task = allTasks.find(t => t.id === id);
+  if (!task) return;
+  document.getElementById('taskModalTitle').textContent = 'Edit Task';
+  document.getElementById('taskId').value = task.id;
+  document.getElementById('taskTitle').value = task.title || '';
+  document.getElementById('taskPriority').value = task.priority || 'medium';
+  document.getElementById('taskDueDate').value = task.due_date || '';
+  document.getElementById('taskCategory').value = task.category || '';
   openModal('taskModal');
 }
 
@@ -1852,6 +1873,5 @@ function appInit() {
 // Auth gate on page load
 if (checkAuth()) appInit();
 </script>
-</div><!-- /appContainer -->
 </body>
 </html>

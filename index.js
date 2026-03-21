@@ -38,6 +38,9 @@ app.use(function(req, res, next) {
   next();
 });
 
+// Serve dashboard
+app.use(express.static(__dirname));
+
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -1274,7 +1277,7 @@ app.post('/wa-toggle', async function(req, res) {
 
 // ========================= SERVER =========================
 
-app.get('/', (req, res) => res.json({
+app.get('/api/status', (req, res) => res.json({
   status: 'Rabih Assistant v5 running',
   tools: TOOLS.length,
   features: ['calendar', 'gmail', 'drive', 'files', 'expenses', 'reminders', 'whatsapp', 'phone',
