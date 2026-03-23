@@ -42,7 +42,13 @@ async function checkAndExecuteDueTasks() {
 
       switch (task.type) {
         case 'whatsapp':
-          var phone = payload.phone || payload.phone_number || payload.number || payload.to || '';
+        case 'send_whatsapp_message':
+          var phone = payload.phone_number || payload.to || payload.number || payload.jid || payload.recipient || payload.group_id || payload.phone || '';
+          if (!phone) {
+            console.error('Scheduler WhatsApp — no phone found in payload:', JSON.stringify(payload));
+            result = { error: 'No phone number found in scheduled task payload. Fields present: ' + Object.keys(payload).join(', ') + '. Full payload: ' + JSON.stringify(payload) };
+            break;
+          }
           var msg = payload.message || payload.text || payload.body || '';
           console.log('Scheduler WhatsApp — phone:', phone, 'message:', msg.substring(0, 50));
           result = await _executeTool('send_whatsapp_message', { phone_number: phone, message: msg });

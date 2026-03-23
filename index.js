@@ -26,7 +26,7 @@ const { locationTools, handleLocationTool } = require('./location-tools');
 const { newsTools, handleNewsTool } = require('./news-tools');
 const { transcribeAudio } = require('./voice-handler');
 const { checklistTools, handleChecklistTool, initChecklists, processChecklistResponse } = require('./checklist-manager');
-const { initWhatsApp, forceNewQR, safeSendMessage } = require('./whatsapp-handler');
+const { initWhatsApp, forceNewQR, safeSendMessage, setAutoReplyHandler, setSupabaseClient } = require('./whatsapp-handler');
 
 const app = express();
 app.use(express.json());
@@ -753,6 +753,41 @@ initWhatsApp({
   rabihChatId: RABIH_CHAT_ID
 });
 
+// Pass Supabase client to whatsapp-handler for wa_enabled checks
+setSupabaseClient(supabase);
+
+// WhatsApp auto-reply handler — called from whatsapp-handler when wa_enabled + no human takeover
+setAutoReplyHandler(async function(from, text, sock) {
+  var chatId = 'wa_' + from;
+  console.log('WA AUTO-REPLY processing:', from.substring(0, 20), text.substring(0, 60));
+
+  // Load conversation history + memory
+  var [history, memoryFacts] = await Promise.all([loadHistory(chatId), loadMemory()]);
+  if (history.length > 10) history = history.slice(-10); // Keep WA history shorter
+  history.push({ role: 'user', content: text });
+
+  // Use Haiku for WA auto-replies (cheaper, faster)
+  var response = await runToolLoop(history, memoryFacts, null, HAIKU_MODEL, false, 500);
+  var textBlock = response.content.find(function(b) { return b.type === 'text'; });
+  var reply = textBlock ? textBlock.text : null;
+
+  if (reply) {
+    await safeSendMessage(from, { text: reply });
+    // Save conversation to Supabase
+    await saveMessage(chatId, 'user', text);
+    await saveMessage(chatId, 'assistant', reply);
+    console.log('WA AUTO-REPLY sent to', from.substring(0, 20), ':', reply.substring(0, 60));
+
+    // Log to whatsapp_logs for dashboard stats
+    try {
+      await supabase.from('whatsapp_logs').insert([
+        { direction: 'incoming', contact_jid: from, message: text },
+        { direction: 'outgoing', contact_jid: from, message: reply }
+      ]);
+    } catch(e) {}
+  }
+});
+
 // Sync WhatsApp socket to communication-tools
 setInterval(function() {
   const sock = require('./whatsapp-handler').getWhatsAppSocket();
@@ -961,9 +996,23 @@ app.post('/confirm-meeting', async function(req, res) {
   }
 });
 
-// POST /wa-toggle — disabled, auto-reply to contacts is permanently off
+// POST /wa-toggle — toggle wa_enabled in Supabase
 app.post('/wa-toggle', async function(req, res) {
-  res.json({ success: true, wa_enabled: false });
+  try {
+    var enabled = req.body.enabled;
+    if (enabled === undefined || enabled === null) {
+      // Toggle: read current, flip it
+      var current = await isWaEnabledInDb();
+      enabled = !current;
+    }
+    var val = enabled ? 'true' : 'false';
+    await supabase.from('assistant_settings').upsert({ key: 'wa_enabled', value: val, updated_at: new Date().toISOString() });
+    console.log('WA toggle set to:', val);
+    res.json({ success: true, wa_enabled: enabled });
+  } catch (err) {
+    console.error('WA toggle error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ========================= SERVER =========================

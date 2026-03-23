@@ -2,7 +2,6 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLat
 const qrcode = require('qrcode');
 const axios = require('axios');
 const FormData = require('form-data');
-const pino = require('pino');
 const path = require('path');
 const fs = require('fs');
 
@@ -12,6 +11,26 @@ let isConnected = false;
 let lastConnectedNotify = 0;
 let _reconnect = null;
 let badMacCount = 0;
+
+// ====== HUMAN TAKEOVER DETECTION ======
+// Key = contact JID, value = timestamp of last manual reply from Rabih
+const humanActive = {};
+const HUMAN_TAKEOVER_MS = 30 * 60 * 1000; // 30 minutes
+
+// External handlers set by index.js via setAutoReplyHandler
+let _autoReplyHandler = null; // async function(from, text, sock) => replyText
+let _supabase = null;
+
+function setAutoReplyHandler(handler) { _autoReplyHandler = handler; }
+function setSupabaseClient(sb) { _supabase = sb; }
+
+async function isWaEnabled() {
+  if (!_supabase) return false;
+  try {
+    var { data } = await _supabase.from('assistant_settings').select('value').eq('key', 'wa_enabled').limit(1).single();
+    return data && data.value === 'true';
+  } catch(e) { return false; }
+}
 
 // ====== RATE LIMITING & HUMAN-LIKE SENDING ======
 const MSG_HOUR_LIMIT = 20;
@@ -109,8 +128,8 @@ function getWhatsAppSocket() {
 // Options: { telegramToken, rabihChatId }
 // Baileys stays connected for outbound sends only. No incoming message processing.
 async function initWhatsApp(options) {
-  const logger = pino({ level: 'fatal' }).child({ module: 'baileys' });
-  logger.level = 'fatal';
+  // Completely silent logger — blocks all Baileys internal logging (Buffer spam, session state, etc.)
+  const logger = { trace: ()=>{}, debug: ()=>{}, info: ()=>{}, warn: ()=>{}, error: ()=>{}, fatal: ()=>{}, child: ()=>logger };
   const telegramToken = options.telegramToken;
   const rabihChatId = options.rabihChatId;
 
@@ -126,7 +145,8 @@ async function initWhatsApp(options) {
       printQRInTerminal: false,
       browser: ['Ubuntu', 'Chrome', '22.0.0'],
       connectTimeoutMs: 60000,
-      keepAliveIntervalMs: 10000
+      keepAliveIntervalMs: 10000,
+      syncFullHistory: false
     });
 
     currentSock = sock;
@@ -239,21 +259,73 @@ async function initWhatsApp(options) {
       }
     });
 
-    // Incoming messages: log only, never process or reply.
-    // Baileys stays connected solely for outbound sends via send_whatsapp_message tool.
-    sock.ev.on('messages.upsert', function(m) {
+    // Incoming messages: auto-reply when wa_enabled + no human takeover active
+    sock.ev.on('messages.upsert', async function(m) {
       try {
         if (m.type !== 'notify') return;
         var msg = m.messages && m.messages[0];
         if (!msg || !msg.message) return;
-        if (msg.key.fromMe) return; // ignore our own outgoing messages
         var from = msg.key.remoteJid || '';
+
+        // --- HUMAN TAKEOVER: detect Rabih's manual outgoing messages ---
+        if (msg.key.fromMe) {
+          // Skip status broadcasts and groups
+          if (from.endsWith('@g.us') || from.endsWith('@broadcast') || from === 'status@broadcast') return;
+          // Rabih manually sent a message to this contact — activate takeover
+          humanActive[from] = Date.now();
+          console.log('Human active for ' + from.substring(0, 20) + ' — bot silent for 30 min');
+          return;
+        }
+
+        // Skip groups and broadcasts for auto-reply
         if (from.endsWith('@g.us') || from.endsWith('@broadcast')) return;
+
         var text = (msg.message.conversation) ||
           (msg.message.extendedTextMessage && msg.message.extendedTextMessage.text) ||
           (msg.message.audioMessage ? '[voice]' : '[media]');
-        console.log('WA ignored:', from.substring(0, 20), String(text).substring(0, 60));
-      } catch(e) {}
+
+        // --- CHECK 1: Human takeover active for this contact? ---
+        if (humanActive[from]) {
+          var elapsed = Date.now() - humanActive[from];
+          if (elapsed < HUMAN_TAKEOVER_MS) {
+            console.log('Human active for ' + from.substring(0, 20) + ' — bot staying silent (' + Math.round((HUMAN_TAKEOVER_MS - elapsed) / 60000) + ' min left)');
+            return;
+          }
+          // Expired — clean up
+          delete humanActive[from];
+          console.log('Human takeover expired for ' + from.substring(0, 20) + ' — bot resuming');
+        }
+
+        // --- CHECK 2: Is wa_enabled true in Supabase? ---
+        var waOn = await isWaEnabled();
+        if (!waOn) {
+          console.log('WA auto-reply OFF — ignoring message from', from.substring(0, 20));
+          return;
+        }
+
+        // --- CHECK 3: Do we have an auto-reply handler? ---
+        if (!_autoReplyHandler) {
+          console.log('WA no auto-reply handler set — ignoring', from.substring(0, 20));
+          return;
+        }
+
+        // Only auto-reply to text messages (skip media-only for now)
+        if (!text || text === '[media]' || text === '[voice]') {
+          console.log('WA non-text message from', from.substring(0, 20), '— skipping auto-reply');
+          return;
+        }
+
+        console.log('WA auto-reply triggered for', from.substring(0, 20), ':', String(text).substring(0, 60));
+
+        // Call the auto-reply handler (defined in index.js)
+        try {
+          await _autoReplyHandler(from, text, sock);
+        } catch (replyErr) {
+          console.error('WA auto-reply error for', from.substring(0, 20), ':', replyErr.message);
+        }
+      } catch(e) {
+        console.error('WA messages.upsert error:', e.message);
+      }
     });
   }
 
@@ -266,4 +338,4 @@ async function initWhatsApp(options) {
   }
 }
 
-module.exports = { initWhatsApp: initWhatsApp, getWhatsAppSocket: getWhatsAppSocket, forceNewQR: forceNewQR, safeSendMessage: safeSendMessage };
+module.exports = { initWhatsApp: initWhatsApp, getWhatsAppSocket: getWhatsAppSocket, forceNewQR: forceNewQR, safeSendMessage: safeSendMessage, setAutoReplyHandler: setAutoReplyHandler, setSupabaseClient: setSupabaseClient };
