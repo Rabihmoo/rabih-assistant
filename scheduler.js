@@ -43,15 +43,21 @@ async function checkAndExecuteDueTasks() {
       switch (task.type) {
         case 'whatsapp':
         case 'send_whatsapp_message':
-          var phone = payload.phone_number || payload.to || payload.number || payload.jid || payload.recipient || payload.group_id || payload.phone || '';
+          var phone = payload.phone_number || payload.to || payload.number || payload.jid || payload.recipient || payload.group_id || payload.group_jid || payload.phone || '';
           if (!phone) {
             console.error('Scheduler WhatsApp — no phone found in payload:', JSON.stringify(payload));
             result = { error: 'No phone number found in scheduled task payload. Fields present: ' + Object.keys(payload).join(', ') + '. Full payload: ' + JSON.stringify(payload) };
             break;
           }
           var msg = payload.message || payload.text || payload.body || '';
-          console.log('Scheduler WhatsApp — phone:', phone, 'message:', msg.substring(0, 50));
-          result = await _executeTool('send_whatsapp_message', { phone_number: phone, message: msg });
+          // Route group JIDs to the group send tool
+          if (phone.endsWith('@g.us')) {
+            console.log('Scheduler WhatsApp group — jid:', phone, 'message:', msg.substring(0, 50));
+            result = await _executeTool('send_whatsapp_group', { group_jid: phone, message: msg });
+          } else {
+            console.log('Scheduler WhatsApp — phone:', phone, 'message:', msg.substring(0, 50));
+            result = await _executeTool('send_whatsapp_message', { phone_number: phone, message: msg });
+          }
           break;
         case 'email':
           result = await _executeTool('send_email', { to: payload.to || payload.email || '', subject: payload.subject || '', body: payload.body || payload.message || '' });
