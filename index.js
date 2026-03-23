@@ -201,7 +201,7 @@ const TOOLS = [
   ...expenseTools, ...reminderTools, ...communicationTools,
   ...contactsTools, ...taskTools, ...schedulerTools,
   ...invoiceTools, ...locationTools, ...newsTools, ...checklistTools,
-  { type: 'web_search_20250305', name: 'web_search' }
+  { type: 'web_search_20250305', name: 'web_search', cache_control: { type: 'ephemeral' } }
 ];
 
 // ========================= MESSAGES =========================
@@ -216,7 +216,8 @@ async function saveMessage(chatId, role, content) {
 
 async function loadHistory(chatId) {
   try {
-    const { data, error } = await supabase.from('assistant_messages').select('role, content, created_at').eq('chat_id', String(chatId)).order('created_at', { ascending: false }).limit(50);
+    const limit = String(chatId).startsWith('wa_') ? 10 : 20;
+    const { data, error } = await supabase.from('assistant_messages').select('role, content, created_at').eq('chat_id', String(chatId)).order('created_at', { ascending: false }).limit(limit);
     if (error) { console.error('Load history error:', error.message); return []; }
     return (data || []).reverse()
       .filter(function(r) { return r.content && r.content.indexOf('__dedup__') !== 0; })
@@ -368,22 +369,33 @@ async function callClaude(messages, memoryFacts, systemOverride, forceModel, max
   var tokens = maxTokens || 2048;
   trackUsage(model);
   console.log('CLAUDE CALL [' + (model === HAIKU_MODEL ? 'HAIKU' : 'SONNET') + '] max_tokens=' + tokens + ' msgs=' + safeMessages.length + ' — "' + userText.substring(0, 60) + '"');
+  const systemPrompt = systemOverride || buildSystemPrompt(memoryFacts || []);
+  const body = {
+    model: model,
+    max_tokens: tokens,
+    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+    tools: TOOLS,
+    messages: safeMessages
+  };
+  const headers = { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31', 'content-type': 'application/json' };
   try {
-    const res = await axios.post(
-      'https://api.anthropic.com/v1/messages',
-      {
-        model: model,
-        max_tokens: tokens,
-        system: systemOverride || buildSystemPrompt(memoryFacts || []),
-        tools: TOOLS,
-        messages: safeMessages
-      },
-      { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 60000 }
-    );
+    const res = await axios.post('https://api.anthropic.com/v1/messages', body, { headers, timeout: 60000 });
     var usage = res.data.usage || {};
-    console.log('CLAUDE DONE [' + (model === HAIKU_MODEL ? 'HAIKU' : 'SONNET') + '] stop=' + res.data.stop_reason + ' input_tokens=' + (usage.input_tokens || '?') + ' output_tokens=' + (usage.output_tokens || '?'));
+    console.log('CLAUDE DONE [' + (model === HAIKU_MODEL ? 'HAIKU' : 'SONNET') + '] stop=' + res.data.stop_reason + ' input_tokens=' + (usage.input_tokens || '?') + ' output_tokens=' + (usage.output_tokens || '?') + ' cache_read=' + (usage.cache_read_input_tokens || 0) + ' cache_write=' + (usage.cache_creation_input_tokens || 0));
     return res.data;
   } catch (err) {
+    if (err.response && err.response.status === 429) {
+      console.log('Rate limited — retrying with shorter history in 15s');
+      await new Promise(function(r) { setTimeout(r, 15000); });
+      const trimmedMessages = safeMessages.slice(-5);
+      try {
+        const res2 = await axios.post('https://api.anthropic.com/v1/messages', Object.assign({}, body, { messages: trimmedMessages }), { headers, timeout: 60000 });
+        return res2.data;
+      } catch (err2) {
+        console.error('Claude retry also failed', err2.response ? err2.response.status : err2.message);
+        return { content: [{ type: 'text', text: 'I am a bit busy right now, please resend your message in a moment.' }], stop_reason: 'end_turn' };
+      }
+    }
     if (err.response) {
       console.error('Claude API ERROR', err.response.status, JSON.stringify(err.response.data).substring(0, 500));
     }
