@@ -216,7 +216,7 @@ async function saveMessage(chatId, role, content) {
 
 async function loadHistory(chatId) {
   try {
-    const limit = String(chatId).startsWith('wa_') ? 10 : 20;
+    const limit = String(chatId).startsWith('wa_') ? 5 : 8;
     const { data, error } = await supabase.from('assistant_messages').select('role, content, created_at').eq('chat_id', String(chatId)).order('created_at', { ascending: false }).limit(limit);
     if (error) { console.error('Load history error:', error.message); return []; }
     return (data || []).reverse()
@@ -592,8 +592,7 @@ async function handleMessage(chatId, userText, messageId) {
   console.log('TELEGRAM → CLAUDE path triggered for: "' + userText.substring(0, 80) + '"');
   await sendTyping(chatId);
   var [history, memoryFacts] = await Promise.all([loadHistory(chatId), loadMemory()]);
-  // Keep last 20 messages for Telegram (more room than WhatsApp but still bounded)
-  if (history.length > 20) history = history.slice(-20);
+  if (history.length > 8) history = history.slice(-8);
   history.push({ role: 'user', content: userText });
 
   var tgMaxTokens = getTelegramMaxTokens(userText);
@@ -775,7 +774,7 @@ setAutoReplyHandler(async function(from, text, sock) {
 
   // Load conversation history + memory
   var [history, memoryFacts] = await Promise.all([loadHistory(chatId), loadMemory()]);
-  if (history.length > 10) history = history.slice(-10); // Keep WA history shorter
+  if (history.length > 4) history = history.slice(-4);
   history.push({ role: 'user', content: text });
 
   // Use Haiku for WA auto-replies (cheaper, faster)
