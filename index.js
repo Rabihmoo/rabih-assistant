@@ -67,8 +67,8 @@ isWaEnabledInDb().then(function(enabled) {
 
 async function loadMemory() {
   try {
-    const { data } = await supabase.from('rabih_memory').select('fact').order('created_at', { ascending: true });
-    return (data || []).map(function(r) { return r.fact; });
+    const { data } = await supabase.from('rabih_memory').select('fact').order('created_at', { ascending: false }).limit(5);
+    return (data || []).reverse().map(function(r) { return r.fact; });
   } catch (e) { return []; }
 }
 
@@ -89,7 +89,7 @@ async function extractAndSaveMemory(userText, assistantReply) {
         'User said: ' + userText,
         'Assistant replied: ' + assistantReply
       ].join('\n') }] },
-      { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+      { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31', 'content-type': 'application/json' } }
     );
     const text = res.data.content[0].text;
     if (text && text !== 'NONE') {
@@ -362,26 +362,46 @@ function sanitizeHistory(messages) {
   return clean;
 }
 
-async function callClaude(messages, memoryFacts, systemOverride, forceModel, maxTokens) {
+// ========================= INTENT ROUTER =========================
+
+async function intentCheck(userText) {
+  try {
+    var res = await axios.post('https://api.anthropic.com/v1/messages', {
+      model: HAIKU_MODEL,
+      max_tokens: 50,
+      messages: [{ role: 'user', content: 'Does this message require using a tool (send message, check email, calendar, files, tasks, contacts, schedule)? Reply with only: TOOL or CHAT\n\nMessage: ' + userText }]
+    }, { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31', 'content-type': 'application/json' }, timeout: 10000 });
+    trackUsage(HAIKU_MODEL);
+    var text = (res.data.content[0].text || '').trim().toUpperCase();
+    return text.includes('TOOL') ? 'TOOL' : 'CHAT';
+  } catch (e) {
+    console.error('Intent check error:', e.message);
+    return 'TOOL'; // Default to TOOL if intent check fails — safer
+  }
+}
+
+async function callClaude(messages, memoryFacts, systemOverride, forceModel, maxTokens, noTools, intent) {
   const safeMessages = sanitizeHistory(messages);
   var userText = getLatestUserText(safeMessages);
   var model = forceModel || SONNET_MODEL;
   var tokens = maxTokens || 2048;
+  var intentLabel = intent || 'TOOL';
+  var modelLabel = model === HAIKU_MODEL ? 'HAIKU' : 'SONNET';
   trackUsage(model);
-  console.log('CLAUDE CALL [' + (model === HAIKU_MODEL ? 'HAIKU' : 'SONNET') + '] max_tokens=' + tokens + ' msgs=' + safeMessages.length + ' — "' + userText.substring(0, 60) + '"');
+  console.log('[' + modelLabel + '] intent=' + intentLabel + ' calling Claude, msgs=' + safeMessages.length + ' — "' + userText.substring(0, 60) + '"');
   const systemPrompt = systemOverride || buildSystemPrompt(memoryFacts || []);
   const body = {
     model: model,
     max_tokens: tokens,
     system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
-    tools: TOOLS,
     messages: safeMessages
   };
+  if (!noTools) body.tools = TOOLS;
   const headers = { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31', 'content-type': 'application/json' };
   try {
     const res = await axios.post('https://api.anthropic.com/v1/messages', body, { headers, timeout: 60000 });
     var usage = res.data.usage || {};
-    console.log('CLAUDE DONE [' + (model === HAIKU_MODEL ? 'HAIKU' : 'SONNET') + '] stop=' + res.data.stop_reason + ' input_tokens=' + (usage.input_tokens || '?') + ' output_tokens=' + (usage.output_tokens || '?') + ' cache_read=' + (usage.cache_read_input_tokens || 0) + ' cache_write=' + (usage.cache_creation_input_tokens || 0));
+    console.log('[' + modelLabel + '] intent=' + intentLabel + ' tokens_in=' + (usage.input_tokens || 0) + ' tokens_out=' + (usage.output_tokens || 0) + ' cache_hit=' + (usage.cache_read_input_tokens || 0));
     return res.data;
   } catch (err) {
     if (err.response && err.response.status === 429) {
@@ -417,8 +437,8 @@ function requiresToolAction(text) {
   return false;
 }
 
-async function runToolLoop(history, memoryFacts, systemOverride, forceModel, _isRetry, maxTokens) {
-  let response = await callClaude(history, memoryFacts, systemOverride, forceModel, maxTokens);
+async function runToolLoop(history, memoryFacts, systemOverride, forceModel, _isRetry, maxTokens, intent) {
+  let response = await callClaude(history, memoryFacts, systemOverride, forceModel, maxTokens, false, intent);
   let rounds = 0;
   let usedTools = false;
   while (response.stop_reason === 'tool_use' && rounds < 5) {
@@ -434,7 +454,7 @@ async function runToolLoop(history, memoryFacts, systemOverride, forceModel, _is
       toolResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) });
     }
     history.push({ role: 'user', content: toolResults });
-    response = await callClaude(history, memoryFacts, systemOverride, forceModel, maxTokens);
+    response = await callClaude(history, memoryFacts, systemOverride, forceModel, maxTokens, false, intent);
   }
 
   // Safety net: if Claude ended without using tools but the request clearly needed action, retry with Sonnet
@@ -517,7 +537,7 @@ async function handleMessage(chatId, userText, messageId) {
               model: HAIKU_MODEL, max_tokens: 100,
               system: 'Extract the meeting date and time from this message. Today is ' + todayStr + '. If "tomorrow" is mentioned, calculate the actual date. Return ONLY JSON: {"date":"YYYY-MM-DD","time":"HH:MM"}. If unknown use empty strings. No other text.',
               messages: [{ role: 'user', content: meeting.message }]
-            }, { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 15000 });
+            }, { headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31', 'content-type': 'application/json' }, timeout: 15000 });
             trackUsage(HAIKU_MODEL);
             var jm = extractRes.data.content[0].text.match(/\{[^}]+\}/);
             if (jm) dateInfo = JSON.parse(jm[0]);
@@ -591,12 +611,24 @@ async function handleMessage(chatId, userText, messageId) {
 
   console.log('TELEGRAM → CLAUDE path triggered for: "' + userText.substring(0, 80) + '"');
   await sendTyping(chatId);
+
+  // Intent router: fast Haiku check before main Claude call
+  var intent = await intentCheck(userText);
+  console.log('[INTENT] ' + intent + ' — "' + userText.substring(0, 60) + '"');
+
   var [history, memoryFacts] = await Promise.all([loadHistory(chatId), loadMemory()]);
   if (history.length > 8) history = history.slice(-8);
   history.push({ role: 'user', content: userText });
 
   var tgMaxTokens = getTelegramMaxTokens(userText);
-  const response = await runToolLoop(history, memoryFacts, null, SONNET_MODEL, false, tgMaxTokens);
+  var response;
+  if (intent === 'CHAT') {
+    // Simple chat — use Haiku, no tools, max_tokens 500
+    response = await callClaude(history, memoryFacts, null, HAIKU_MODEL, 500, true, 'CHAT');
+  } else {
+    // Tool action — use Sonnet with full tool calling
+    response = await runToolLoop(history, memoryFacts, null, SONNET_MODEL, false, tgMaxTokens, 'TOOL');
+  }
   const textBlock = response.content.find(function(b) { return b.type === 'text'; });
   const finalReply = textBlock ? textBlock.text : 'Done!';
   await saveMessage(chatId, 'user', userText);
